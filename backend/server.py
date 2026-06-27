@@ -37,6 +37,8 @@ MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24 * 7
 
@@ -136,12 +138,16 @@ class ReservationCreateIn(BaseModel):
     customer_name: str
     customer_email: EmailStr
     customer_phone: str
+    check_in_date: str   # YYYY-MM-DD (required)
+    check_out_date: str  # YYYY-MM-DD (required)
     room_number: Optional[str] = None  # may be assigned by admin later
 
 class AdminReservationIn(BaseModel):
     customer_name: str
     customer_email: EmailStr
     customer_phone: str
+    check_in_date: str
+    check_out_date: str
     room_number: Optional[str] = None
     status: ReservationStatus = "pending"
 
@@ -156,9 +162,12 @@ class ReservationOut(BaseModel):
     customer_email: EmailStr
     customer_phone: str
     room_number: Optional[str] = None
+    check_in_date: Optional[str] = None
+    check_out_date: Optional[str] = None
     status: ReservationStatus
     access_code: str
     user_id: Optional[str] = None
+    email_sent: Optional[bool] = False
     created_at: str
     updated_at: str
 
@@ -231,8 +240,12 @@ def public_reservation(r: dict) -> "ReservationOut":
     return ReservationOut(
         id=r["id"], customer_name=r["customer_name"],
         customer_email=r["customer_email"], customer_phone=r["customer_phone"],
-        room_number=r.get("room_number"), status=r["status"],
+        room_number=r.get("room_number"),
+        check_in_date=r.get("check_in_date"),
+        check_out_date=r.get("check_out_date"),
+        status=r["status"],
         access_code=r["access_code"], user_id=r.get("user_id"),
+        email_sent=bool(r.get("email_sent")),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -247,6 +260,86 @@ def gen_access_code(length: int = 6) -> str:
     # remove confusing chars
     alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+def parse_iso_date(s: str) -> datetime:
+    if not s or not _DATE_RE.match(s.strip()):
+        raise HTTPException(400, "Tarih formatı YYYY-MM-DD olmalı")
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d")
+    except ValueError as e:
+        raise HTTPException(400, f"Geçersiz tarih: {e}")
+
+def validate_stay_dates(check_in: str, check_out: str) -> tuple[str, str]:
+    ci = parse_iso_date(check_in)
+    co = parse_iso_date(check_out)
+    if co <= ci:
+        raise HTTPException(400, "Çıkış tarihi giriş tarihinden sonra olmalı")
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    if ci < today - timedelta(days=1):
+        raise HTTPException(400, "Giriş tarihi geçmişte olamaz")
+    return ci.strftime("%Y-%m-%d"), co.strftime("%Y-%m-%d")
+
+
+def _format_tr_date(iso: Optional[str]) -> str:
+    if not iso:
+        return "—"
+    try:
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except Exception:
+        return iso
+
+
+async def send_reservation_email(reservation: dict) -> bool:
+    """Send reservation confirmation via Resend. Returns True if dispatched.
+    If RESEND_API_KEY is empty, logs the email content (sandbox/dev mode)."""
+    to = reservation["customer_email"]
+    code = reservation["access_code"]
+    name = reservation["customer_name"]
+    ci = _format_tr_date(reservation.get("check_in_date"))
+    co = _format_tr_date(reservation.get("check_out_date"))
+    room = reservation.get("room_number") or "Otele girişte atanacak"
+    subject = f"Rezervasyon Onayı · Kod: {code}"
+    html = f"""<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0F0F11;color:#F5F5F5;margin:0;padding:24px;">
+<div style="max-width:520px;margin:0 auto;background:#1A1A1D;border:1px solid #26262A;border-radius:16px;padding:32px;">
+  <h1 style="color:#D4AF37;font-family:Georgia,serif;margin:0 0 8px 0;">Hoş Geldiniz, {name}</h1>
+  <p style="color:#D1D1D1;line-height:1.55;margin:0 0 24px 0;">Rezervasyonunuz başarıyla oluşturuldu. Aşağıdaki kodu otele giriş yaparken kullanacaksınız.</p>
+  <div style="background:#3A3320;border:1px solid #D4AF37;border-radius:12px;padding:20px;text-align:center;margin:24px 0;">
+    <div style="color:#F2E3B6;font-size:11px;letter-spacing:2px;text-transform:uppercase;">Rezervasyon Kodu</div>
+    <div style="color:#D4AF37;font-size:36px;font-weight:800;letter-spacing:6px;margin-top:8px;font-family:Georgia,serif;">{code}</div>
+  </div>
+  <table style="width:100%;color:#D1D1D1;font-size:14px;border-collapse:collapse;">
+    <tr><td style="padding:8px 0;color:#A3A3A3;">Giriş</td><td style="padding:8px 0;text-align:right;">{ci}</td></tr>
+    <tr><td style="padding:8px 0;color:#A3A3A3;">Çıkış</td><td style="padding:8px 0;text-align:right;">{co}</td></tr>
+    <tr><td style="padding:8px 0;color:#A3A3A3;">Oda</td><td style="padding:8px 0;text-align:right;">{room}</td></tr>
+  </table>
+  <p style="color:#A3A3A3;font-size:12px;margin-top:24px;line-height:1.55;">Otele girişte uygulamamızdan "Otele Giriş" ekranını açıp e-postanızı, yukarıdaki kodu ve seçeceğiniz şifreyi girerek hesabınızı aktive edebilirsiniz. İyi konaklamalar dileriz.</p>
+</div></body></html>"""
+
+    if not RESEND_API_KEY:
+        logger.info(f"[EMAIL SANDBOX] To: {to} | Subject: {subject} | Code: {code} (RESEND_API_KEY boş; log-only)")
+        return False
+    try:
+        import requests
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"from": EMAIL_FROM, "to": [to], "subject": subject, "html": html},
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            logger.error(f"Resend hatası ({resp.status_code}): {resp.text}")
+            return False
+        logger.info(f"E-posta gönderildi → {to} (id: {resp.json().get('id')})")
+        return True
+    except Exception as e:
+        logger.error(f"Resend gönderim hatası: {e}")
+        return False
 
 # --------------------------------------------------------------------------
 # Orchestrator (rule-based + Claude Sonnet 4.5)
@@ -675,6 +768,7 @@ async def meta_departments():
 async def public_create_reservation(body: ReservationCreateIn):
     """Public endpoint — guest can reserve without password. Returns access_code."""
     email = body.customer_email.lower()
+    ci, co = validate_stay_dates(body.check_in_date, body.check_out_date)
     # If user already exists (already checked in), block to avoid duplicates
     existing_user = await db.users.find_one({"email": email}, {"_id": 0})
     if existing_user:
@@ -690,13 +784,20 @@ async def public_create_reservation(body: ReservationCreateIn):
         "customer_email": email,
         "customer_phone": body.customer_phone.strip(),
         "room_number": (body.room_number or None),
+        "check_in_date": ci,
+        "check_out_date": co,
         "access_code": code,
         "status": "pending",
         "user_id": None,
+        "email_sent": False,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
     await db.reservations.insert_one(doc.copy())
+    sent = await send_reservation_email(doc)
+    if sent:
+        await db.reservations.update_one({"id": doc["id"]}, {"$set": {"email_sent": True}})
+        doc["email_sent"] = True
     return public_reservation(doc)
 
 @api.post("/checkin", response_model=AuthOut)
@@ -761,6 +862,7 @@ async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(g
     if u["role"] != "admin":
         raise HTTPException(403, "Sadece yönetici")
     email = body.customer_email.lower()
+    ci, co = validate_stay_dates(body.check_in_date, body.check_out_date)
     for _ in range(8):
         code = gen_access_code(6)
         if not await db.reservations.find_one({"access_code": code}):
@@ -771,13 +873,20 @@ async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(g
         "customer_email": email,
         "customer_phone": body.customer_phone.strip(),
         "room_number": body.room_number or None,
+        "check_in_date": ci,
+        "check_out_date": co,
         "access_code": code,
         "status": body.status,
         "user_id": None,
+        "email_sent": False,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
     await db.reservations.insert_one(doc.copy())
+    sent = await send_reservation_email(doc)
+    if sent:
+        await db.reservations.update_one({"id": doc["id"]}, {"$set": {"email_sent": True}})
+        doc["email_sent"] = True
     return public_reservation(doc)
 
 class AssignRoomIn(BaseModel):

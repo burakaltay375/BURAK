@@ -8,6 +8,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { api, Reservation } from "@/src/api";
+import { autoFormatDate, isValidISODate, formatTrDate, nightsBetween } from "@/src/dates";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 export default function Reserve() {
@@ -15,18 +16,32 @@ export default function Reserve() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [checkIn, setCheckIn] = useState("");
+  const [checkOut, setCheckOut] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<Reservation | null>(null);
 
+  const datesValid = isValidISODate(checkIn) && isValidISODate(checkOut);
+  const nights = nightsBetween(checkIn, checkOut);
+
   const submit = async () => {
-    setErr(null); setLoading(true);
+    setErr(null);
+    if (!isValidISODate(checkIn) || !isValidISODate(checkOut)) {
+      setErr("Tarihleri YYYY-AA-GG formatında girin."); return;
+    }
+    if ((nights ?? 0) < 1) {
+      setErr("Çıkış tarihi giriş tarihinden sonra olmalı."); return;
+    }
+    setLoading(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const r = await api.createReservation({
         customer_name: name.trim(),
         customer_email: email.trim(),
         customer_phone: phone.trim(),
+        check_in_date: checkIn,
+        check_out_date: checkOut,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setResult(r);
@@ -52,7 +67,13 @@ export default function Reserve() {
             <Row label="Ad Soyad" value={result.customer_name} />
             <Row label="E-posta" value={result.customer_email} />
             <Row label="Telefon" value={result.customer_phone} />
+            <Row label="Giriş" value={formatTrDate(result.check_in_date)} />
+            <Row label="Çıkış" value={formatTrDate(result.check_out_date)} />
+            {nightsBetween(result.check_in_date, result.check_out_date) !== null && (
+              <Row label="Gece" value={`${nightsBetween(result.check_in_date, result.check_out_date)} gece`} />
+            )}
             <Row label="Durum" value="Beklemede (otele check-in bekleniyor)" />
+            <Row label="E-posta" value={result.email_sent ? "Gönderildi ✓" : "Sandbox / log-only"} />
           </View>
           <Pressable testID="goto-login-from-success" onPress={() => router.replace("/login")} style={s.btn}>
             <Text style={s.btnText}>Giriş Ekranına Dön</Text>
@@ -78,11 +99,43 @@ export default function Reserve() {
           <TextInput testID="reserve-email-input" placeholder="E-posta" placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} style={s.input} />
           <TextInput testID="reserve-phone-input" placeholder="Telefon (+90 5xx xxx xx xx)" placeholderTextColor={COLORS.onSurfaceTertiary} keyboardType="phone-pad" value={phone} onChangeText={setPhone} style={s.input} />
 
+          <View style={s.dateRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.dateLabel}>Giriş</Text>
+              <TextInput
+                testID="reserve-checkin-input"
+                placeholder="YYYY-AA-GG"
+                placeholderTextColor={COLORS.onSurfaceTertiary}
+                keyboardType="number-pad"
+                value={checkIn}
+                onChangeText={(v) => setCheckIn(autoFormatDate(v))}
+                maxLength={10}
+                style={[s.input, !!checkIn && !isValidISODate(checkIn) && { borderColor: COLORS.error }]}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.dateLabel}>Çıkış</Text>
+              <TextInput
+                testID="reserve-checkout-input"
+                placeholder="YYYY-AA-GG"
+                placeholderTextColor={COLORS.onSurfaceTertiary}
+                keyboardType="number-pad"
+                value={checkOut}
+                onChangeText={(v) => setCheckOut(autoFormatDate(v))}
+                maxLength={10}
+                style={[s.input, !!checkOut && !isValidISODate(checkOut) && { borderColor: COLORS.error }]}
+              />
+            </View>
+          </View>
+          {datesValid && nights !== null && nights > 0 && (
+            <Text style={s.nightsHint} testID="reserve-nights-hint">{nights} gece konaklama</Text>
+          )}
+
           <Pressable
             testID="reserve-submit-button"
             onPress={submit}
-            disabled={loading || !name.trim() || !email.trim() || !phone.trim()}
-            style={({ pressed }) => [s.btn, pressed && { opacity: 0.85 }, (loading || !name.trim() || !email.trim() || !phone.trim()) && { opacity: 0.5 }]}
+            disabled={loading || !name.trim() || !email.trim() || !phone.trim() || !datesValid || (nights ?? 0) < 1}
+            style={({ pressed }) => [s.btn, pressed && { opacity: 0.85 }, (loading || !name.trim() || !email.trim() || !phone.trim() || !datesValid || (nights ?? 0) < 1) && { opacity: 0.5 }]}
           >
             {loading ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.btnText}>Rezervasyon Oluştur</Text>}
           </Pressable>
@@ -114,6 +167,9 @@ const s = StyleSheet.create({
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   subtitle: { fontSize: 13, color: COLORS.onSurfaceSecondary, lineHeight: 19, marginBottom: SPACING.md },
   input: { backgroundColor: COLORS.surfaceSecondary, color: COLORS.onSurface, borderRadius: RADIUS.md, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, fontSize: 16, borderWidth: 1, borderColor: COLORS.border },
+  dateRow: { flexDirection: "row", gap: SPACING.sm },
+  dateLabel: { color: COLORS.onSurfaceTertiary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6, marginLeft: 4 },
+  nightsHint: { color: COLORS.brand, fontSize: 12, textAlign: "center", marginTop: -SPACING.sm },
   btn: { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingVertical: SPACING.lg, alignItems: "center", marginTop: SPACING.md },
   btnText: { color: COLORS.onBrandPrimary, fontSize: 16, fontWeight: "700" },
   err: { color: COLORS.error, fontSize: 14 },

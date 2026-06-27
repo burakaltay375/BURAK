@@ -8,6 +8,7 @@ import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { api, Reservation, Room, ReservationStatus } from "@/src/api";
+import { autoFormatDate, isValidISODate, formatTrDate, nightsBetween } from "@/src/dates";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 type Tab = "reservations" | "rooms";
@@ -33,7 +34,7 @@ export default function AdminReservations() {
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [newRes, setNewRes] = useState({ open: false, name: "", email: "", phone: "", room: "" });
+  const [newRes, setNewRes] = useState({ open: false, name: "", email: "", phone: "", room: "", checkIn: "", checkOut: "" });
   const [newRoom, setNewRoom] = useState({ open: false, num: "", type: "Standard" });
   const [assignRoom, setAssignRoom] = useState<{ open: boolean; res?: Reservation; value: string }>({ open: false, value: "" });
   const [err, setErr] = useState<string | null>(null);
@@ -51,16 +52,25 @@ export default function AdminReservations() {
   useEffect(() => { const id = setInterval(load, 8000); return () => clearInterval(id); }, [load]);
 
   const createReservation = async () => {
-    setErr(null); setBusy("create-res");
+    setErr(null);
+    if (!isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut)) {
+      setErr("Tarihler YYYY-AA-GG formatında olmalı"); return;
+    }
+    if ((nightsBetween(newRes.checkIn, newRes.checkOut) ?? 0) < 1) {
+      setErr("Çıkış tarihi giriş tarihinden sonra olmalı"); return;
+    }
+    setBusy("create-res");
     try {
       await api.adminCreateReservation({
         customer_name: newRes.name.trim(),
         customer_email: newRes.email.trim(),
         customer_phone: newRes.phone.trim(),
+        check_in_date: newRes.checkIn,
+        check_out_date: newRes.checkOut,
         room_number: newRes.room.trim() || undefined,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setNewRes({ open: false, name: "", email: "", phone: "", room: "" });
+      setNewRes({ open: false, name: "", email: "", phone: "", room: "", checkIn: "", checkOut: "" });
       await load();
     } catch (e: any) { setErr(e.message); } finally { setBusy(null); }
   };
@@ -141,6 +151,14 @@ export default function AdminReservations() {
                 <Text style={[s.badge, { backgroundColor: STATUS_COLOR[item.status] }]}>{STATUS_LABEL[item.status]}</Text>
               </View>
               <Text style={s.meta}>{item.customer_email} · {item.customer_phone}</Text>
+              <View style={s.datesRow}>
+                <Ionicons name="calendar" size={12} color={COLORS.onSurfaceTertiary} />
+                <Text style={s.datesText}>
+                  {formatTrDate(item.check_in_date)} → {formatTrDate(item.check_out_date)}
+                  {nightsBetween(item.check_in_date, item.check_out_date) !== null && ` · ${nightsBetween(item.check_in_date, item.check_out_date)} gece`}
+                </Text>
+                {item.email_sent && <Text style={s.emailBadge}>✉ gönderildi</Text>}
+              </View>
               <View style={s.codeRow}>
                 <Text style={s.codeLbl}>Kod:</Text>
                 <Text style={s.codeVal} selectable>{item.access_code}</Text>
@@ -226,8 +244,35 @@ export default function AdminReservations() {
               <TextInput testID="new-res-name" placeholder="Ad Soyad" placeholderTextColor={COLORS.onSurfaceTertiary} value={newRes.name} onChangeText={(v) => setNewRes({ ...newRes, name: v })} style={s.input} />
               <TextInput testID="new-res-email" placeholder="E-posta" placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="none" keyboardType="email-address" value={newRes.email} onChangeText={(v) => setNewRes({ ...newRes, email: v })} style={s.input} />
               <TextInput testID="new-res-phone" placeholder="Telefon" placeholderTextColor={COLORS.onSurfaceTertiary} keyboardType="phone-pad" value={newRes.phone} onChangeText={(v) => setNewRes({ ...newRes, phone: v })} style={s.input} />
+              <View style={s.modalDatesRow}>
+                <TextInput
+                  testID="new-res-checkin"
+                  placeholder="Giriş YYYY-AA-GG"
+                  placeholderTextColor={COLORS.onSurfaceTertiary}
+                  keyboardType="number-pad"
+                  value={newRes.checkIn}
+                  onChangeText={(v) => setNewRes({ ...newRes, checkIn: autoFormatDate(v) })}
+                  maxLength={10}
+                  style={[s.input, { flex: 1 }, !!newRes.checkIn && !isValidISODate(newRes.checkIn) && { borderColor: COLORS.error }]}
+                />
+                <TextInput
+                  testID="new-res-checkout"
+                  placeholder="Çıkış YYYY-AA-GG"
+                  placeholderTextColor={COLORS.onSurfaceTertiary}
+                  keyboardType="number-pad"
+                  value={newRes.checkOut}
+                  onChangeText={(v) => setNewRes({ ...newRes, checkOut: autoFormatDate(v) })}
+                  maxLength={10}
+                  style={[s.input, { flex: 1 }, !!newRes.checkOut && !isValidISODate(newRes.checkOut) && { borderColor: COLORS.error }]}
+                />
+              </View>
               <TextInput testID="new-res-room" placeholder="Oda (opsiyonel)" placeholderTextColor={COLORS.onSurfaceTertiary} keyboardType="numeric" value={newRes.room} onChangeText={(v) => setNewRes({ ...newRes, room: v })} style={s.input} />
-              <Pressable testID="new-res-submit" onPress={createReservation} disabled={busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim()} style={[s.modalBtn, (busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim()) && { opacity: 0.5 }]}>
+              <Pressable
+                testID="new-res-submit"
+                onPress={createReservation}
+                disabled={busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut)}
+                style={[s.modalBtn, (busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut)) && { opacity: 0.5 }]}
+              >
                 {busy === "create-res" ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.modalBtnText}>Oluştur</Text>}
               </Pressable>
             </View>
@@ -313,6 +358,10 @@ const s = StyleSheet.create({
   name: { color: COLORS.onSurface, fontSize: 15, fontWeight: "700", flex: 1, fontFamily: TYPE.display },
   badge: { paddingHorizontal: SPACING.sm, paddingVertical: 2, borderRadius: RADIUS.pill, fontSize: 10, fontWeight: "700", color: "#0F0F11", overflow: "hidden" },
   meta: { color: COLORS.onSurfaceTertiary, fontSize: 12 },
+  datesRow: { flexDirection: "row", alignItems: "center", gap: SPACING.xs, flexWrap: "wrap" },
+  datesText: { color: COLORS.onSurfaceSecondary, fontSize: 12, flex: 1 },
+  emailBadge: { color: COLORS.success, fontSize: 10, fontWeight: "700", backgroundColor: "rgba(76,175,80,0.15)", paddingHorizontal: 6, paddingVertical: 2, borderRadius: RADIUS.sm },
+  modalDatesRow: { flexDirection: "row", gap: SPACING.sm },
   codeRow: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, flexWrap: "wrap", marginTop: 4 },
   codeLbl: { color: COLORS.onSurfaceTertiary, fontSize: 11 },
   codeVal: { color: COLORS.brand, fontSize: 14, fontWeight: "800", letterSpacing: 2 },

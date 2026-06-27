@@ -64,9 +64,12 @@ export type Reservation = {
   customer_email: string;
   customer_phone: string;
   room_number?: string | null;
+  check_in_date?: string | null;
+  check_out_date?: string | null;
   status: ReservationStatus;
   access_code: string;
   user_id?: string | null;
+  email_sent?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -110,14 +113,14 @@ export const api = {
   departments: () => request<{ code: string; name: string }[]>("/meta/departments"),
 
   // Public reservation (no auth required)
-  createReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; room_number?: string }) =>
+  createReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; check_in_date: string; check_out_date: string; room_number?: string }) =>
     request<Reservation>("/reservations", { method: "POST", body: JSON.stringify(b) }),
   checkin: (b: { email: string; access_code: string; new_password: string }) =>
     request<AuthOut>("/checkin", { method: "POST", body: JSON.stringify(b) }),
 
   // Admin reservations
   listReservations: () => request<Reservation[]>("/admin/reservations"),
-  adminCreateReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; room_number?: string }) =>
+  adminCreateReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; check_in_date: string; check_out_date: string; room_number?: string }) =>
     request<Reservation>("/admin/reservations", { method: "POST", body: JSON.stringify(b) }),
   assignRoom: (id: string, room_number: string) =>
     request<Reservation>(`/admin/reservations/${id}/assign-room`, { method: "POST", body: JSON.stringify({ room_number }) }),
