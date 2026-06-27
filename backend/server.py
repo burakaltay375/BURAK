@@ -14,6 +14,8 @@ import logging
 import asyncio
 import tempfile
 import re
+import string
+import secrets
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
@@ -127,6 +129,50 @@ class RequestOut(BaseModel):
 class CompleteIn(BaseModel):
     proof_photo: str  # base64 data URI or raw base64
 
+# --- Reservations & Rooms ---
+ReservationStatus = Literal["pending", "checked_in", "completed", "cancelled"]
+
+class ReservationCreateIn(BaseModel):
+    customer_name: str
+    customer_email: EmailStr
+    customer_phone: str
+    room_number: Optional[str] = None  # may be assigned by admin later
+
+class AdminReservationIn(BaseModel):
+    customer_name: str
+    customer_email: EmailStr
+    customer_phone: str
+    room_number: Optional[str] = None
+    status: ReservationStatus = "pending"
+
+class CheckinIn(BaseModel):
+    email: EmailStr
+    access_code: str
+    new_password: str
+
+class ReservationOut(BaseModel):
+    id: str
+    customer_name: str
+    customer_email: EmailStr
+    customer_phone: str
+    room_number: Optional[str] = None
+    status: ReservationStatus
+    access_code: str
+    user_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+class RoomIn(BaseModel):
+    room_number: str
+    type: Optional[str] = "Standard"
+
+class RoomOut(BaseModel):
+    id: str
+    room_number: str
+    type: str
+    status: Literal["available", "occupied"]
+    created_at: str
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -180,6 +226,27 @@ def public_request(r: dict) -> RequestOut:
         completed_at=r.get("completed_at"),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
+
+def public_reservation(r: dict) -> "ReservationOut":
+    return ReservationOut(
+        id=r["id"], customer_name=r["customer_name"],
+        customer_email=r["customer_email"], customer_phone=r["customer_phone"],
+        room_number=r.get("room_number"), status=r["status"],
+        access_code=r["access_code"], user_id=r.get("user_id"),
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
+
+def public_room(r: dict) -> "RoomOut":
+    return RoomOut(
+        id=r["id"], room_number=r["room_number"], type=r.get("type") or "Standard",
+        status=r.get("status") or "available", created_at=r["created_at"],
+    )
+
+def gen_access_code(length: int = 6) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    # remove confusing chars
+    alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 # --------------------------------------------------------------------------
 # Orchestrator (rule-based + Claude Sonnet 4.5)
@@ -349,7 +416,13 @@ async def register(body: RegisterIn):
 @api.post("/auth/login", response_model=AuthOut)
 async def login(body: LoginIn):
     u = await db.users.find_one({"email": body.email.lower()}, {"_id": 0})
-    if not u or not verify_password(body.password, u["password_hash"]):
+    if not u:
+        # Check if there's a pending reservation under this email
+        rsv = await db.reservations.find_one({"customer_email": body.email.lower(), "status": "pending"}, {"_id": 0})
+        if rsv:
+            raise HTTPException(401, "Rezervasyonunuz var ama henüz check-in yapmadınız. Lütfen 'Otele Giriş' (Check-in) ekranını kullanın.")
+        raise HTTPException(401, "E-posta veya şifre hatalı")
+    if not verify_password(body.password, u["password_hash"]):
         raise HTTPException(401, "E-posta veya şifre hatalı")
     return AuthOut(token=make_token(u["id"]), user=public_user(u))
 
@@ -596,6 +669,219 @@ async def meta_departments():
     return [{"code": k, "name": v} for k, v in DEPARTMENTS.items()]
 
 # --------------------------------------------------------------------------
+# Reservations (public) + Check-in
+# --------------------------------------------------------------------------
+@api.post("/reservations", response_model=ReservationOut)
+async def public_create_reservation(body: ReservationCreateIn):
+    """Public endpoint — guest can reserve without password. Returns access_code."""
+    email = body.customer_email.lower()
+    # If user already exists (already checked in), block to avoid duplicates
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing_user:
+        raise HTTPException(409, "Bu e-posta zaten otele kayıtlı. Lütfen giriş yapın.")
+    # Ensure unique access_code
+    for _ in range(8):
+        code = gen_access_code(6)
+        if not await db.reservations.find_one({"access_code": code}):
+            break
+    doc = {
+        "id": str(uuid.uuid4()),
+        "customer_name": body.customer_name.strip(),
+        "customer_email": email,
+        "customer_phone": body.customer_phone.strip(),
+        "room_number": (body.room_number or None),
+        "access_code": code,
+        "status": "pending",
+        "user_id": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.reservations.insert_one(doc.copy())
+    return public_reservation(doc)
+
+@api.post("/checkin", response_model=AuthOut)
+async def public_checkin(body: CheckinIn):
+    """Guest activates account at hotel by providing access code + new password."""
+    email = body.email.lower()
+    code = body.access_code.strip().upper()
+    if len(body.new_password) < 4:
+        raise HTTPException(400, "Şifre en az 4 karakter olmalı")
+    r = await db.reservations.find_one({"customer_email": email, "access_code": code}, {"_id": 0})
+    if not r:
+        raise HTTPException(401, "E-posta veya rezervasyon kodu hatalı")
+    if r["status"] not in ("pending", "checked_in"):
+        raise HTTPException(400, "Rezervasyon aktif değil")
+    # If a user was already created for this reservation, update password; else create
+    user = None
+    if r.get("user_id"):
+        user = await db.users.find_one({"id": r["user_id"]}, {"_id": 0})
+    if not user:
+        user = await db.users.find_one({"email": email}, {"_id": 0})
+    if user:
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"password_hash": hash_password(body.new_password),
+                      "room_no": r.get("room_number") or user.get("room_no"),
+                      "name": r["customer_name"]}},
+        )
+        user = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    else:
+        user = {
+            "id": str(uuid.uuid4()),
+            "email": email,
+            "password_hash": hash_password(body.new_password),
+            "name": r["customer_name"],
+            "role": "guest",
+            "department": None,
+            "room_no": r.get("room_number"),
+            "created_at": now_iso(),
+        }
+        await db.users.insert_one(user.copy())
+    await db.reservations.update_one(
+        {"id": r["id"]},
+        {"$set": {"status": "checked_in", "user_id": user["id"], "updated_at": now_iso()}},
+    )
+    # Mark room occupied
+    if r.get("room_number"):
+        await db.rooms.update_one({"room_number": r["room_number"]}, {"$set": {"status": "occupied"}})
+    return AuthOut(token=make_token(user["id"]), user=public_user(user))
+
+# --------------------------------------------------------------------------
+# Admin: Reservations & Rooms
+# --------------------------------------------------------------------------
+@api.get("/admin/reservations", response_model=List[ReservationOut])
+async def admin_list_reservations(u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    docs = await db.reservations.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [public_reservation(d) for d in docs]
+
+@api.post("/admin/reservations", response_model=ReservationOut)
+async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    email = body.customer_email.lower()
+    for _ in range(8):
+        code = gen_access_code(6)
+        if not await db.reservations.find_one({"access_code": code}):
+            break
+    doc = {
+        "id": str(uuid.uuid4()),
+        "customer_name": body.customer_name.strip(),
+        "customer_email": email,
+        "customer_phone": body.customer_phone.strip(),
+        "room_number": body.room_number or None,
+        "access_code": code,
+        "status": body.status,
+        "user_id": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.reservations.insert_one(doc.copy())
+    return public_reservation(doc)
+
+class AssignRoomIn(BaseModel):
+    room_number: str
+
+@api.post("/admin/reservations/{rid}/assign-room", response_model=ReservationOut)
+async def admin_assign_room(rid: str, body: AssignRoomIn, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    await db.reservations.update_one(
+        {"id": rid}, {"$set": {"room_number": body.room_number, "updated_at": now_iso()}},
+    )
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    return public_reservation(r)
+
+@api.post("/admin/reservations/{rid}/checkin", response_model=ReservationOut)
+async def admin_approve_checkin(rid: str, u: dict = Depends(get_current_user)):
+    """Admin manually marks a reservation as checked_in (without requiring guest to enter code).
+    Note: the guest still needs to set a password via /api/checkin to actually log in."""
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    if r["status"] == "completed":
+        raise HTTPException(400, "Tamamlanmış rezervasyon")
+    await db.reservations.update_one(
+        {"id": rid}, {"$set": {"status": "checked_in", "updated_at": now_iso()}},
+    )
+    if r.get("room_number"):
+        await db.rooms.update_one({"room_number": r["room_number"]}, {"$set": {"status": "occupied"}})
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    return public_reservation(r)
+
+@api.post("/admin/reservations/{rid}/complete", response_model=ReservationOut)
+async def admin_complete_reservation(rid: str, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    await db.reservations.update_one(
+        {"id": rid}, {"$set": {"status": "completed", "updated_at": now_iso()}},
+    )
+    if r.get("room_number"):
+        await db.rooms.update_one({"room_number": r["room_number"]}, {"$set": {"status": "available"}})
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    return public_reservation(r)
+
+@api.post("/admin/reservations/{rid}/cancel", response_model=ReservationOut)
+async def admin_cancel_reservation(rid: str, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    await db.reservations.update_one(
+        {"id": rid}, {"$set": {"status": "cancelled", "updated_at": now_iso()}},
+    )
+    if r.get("room_number"):
+        await db.rooms.update_one({"room_number": r["room_number"]}, {"$set": {"status": "available"}})
+    r = await db.reservations.find_one({"id": rid}, {"_id": 0})
+    return public_reservation(r)
+
+@api.get("/admin/rooms", response_model=List[RoomOut])
+async def admin_list_rooms(u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    docs = await db.rooms.find({}, {"_id": 0}).sort("room_number", 1).to_list(500)
+    return [public_room(d) for d in docs]
+
+@api.post("/admin/rooms", response_model=RoomOut)
+async def admin_create_room(body: RoomIn, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    rn = body.room_number.strip()
+    if not rn:
+        raise HTTPException(400, "Oda numarası gerekli")
+    existing = await db.rooms.find_one({"room_number": rn})
+    if existing:
+        raise HTTPException(409, "Bu oda numarası zaten kayıtlı")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "room_number": rn,
+        "type": body.type or "Standard",
+        "status": "available",
+        "created_at": now_iso(),
+    }
+    await db.rooms.insert_one(doc.copy())
+    return public_room(doc)
+
+@api.delete("/admin/rooms/{rid}")
+async def admin_delete_room(rid: str, u: dict = Depends(get_current_user)):
+    if u["role"] != "admin":
+        raise HTTPException(403, "Sadece yönetici")
+    res = await db.rooms.delete_one({"id": rid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Oda bulunamadı")
+    return {"ok": True}
+
+# --------------------------------------------------------------------------
 # Seed demo data
 # --------------------------------------------------------------------------
 async def seed_demo():
@@ -648,6 +934,44 @@ async def seed_demo():
             "created_at": now_iso(), "updated_at": now_iso(),
         }
         await db.requests.insert_one(doc)
+
+    # Seed rooms
+    rooms_seed = [
+        ("101", "Standard"), ("102", "Standard"), ("103", "Standard"),
+        ("204", "Deluxe"), ("205", "Deluxe"),
+        ("315", "Deluxe"), ("316", "Deluxe"),
+        ("401", "Suite"), ("402", "Suite"),
+    ]
+    for rn, tp in rooms_seed:
+        # Mark occupied for rooms already assigned to seeded guests
+        status_r = "occupied" if rn in ("204", "315") else "available"
+        await db.rooms.insert_one({
+            "id": str(uuid.uuid4()),
+            "room_number": rn, "type": tp, "status": status_r,
+            "created_at": now_iso(),
+        })
+
+    # Seed sample pending reservations
+    sample_reservations = [
+        {"customer_name": "Murat Kaya", "customer_email": "murat.kaya@example.com",
+         "customer_phone": "+90 555 123 45 67", "room_number": "401"},
+        {"customer_name": "Zeynep Aksoy", "customer_email": "zeynep@example.com",
+         "customer_phone": "+90 532 987 65 43", "room_number": None},
+    ]
+    for s in sample_reservations:
+        await db.reservations.insert_one({
+            "id": str(uuid.uuid4()),
+            "customer_name": s["customer_name"],
+            "customer_email": s["customer_email"],
+            "customer_phone": s["customer_phone"],
+            "room_number": s["room_number"],
+            "access_code": gen_access_code(6),
+            "status": "pending",
+            "user_id": None,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        })
+
     logger.info("Seed complete.")
 
 @app.on_event("startup")

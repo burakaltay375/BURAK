@@ -56,6 +56,29 @@ export type RequestItem = {
   created_at: string; updated_at: string;
 };
 
+export type ReservationStatus = "pending" | "checked_in" | "completed" | "cancelled";
+
+export type Reservation = {
+  id: string;
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  room_number?: string | null;
+  status: ReservationStatus;
+  access_code: string;
+  user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Room = {
+  id: string;
+  room_number: string;
+  type: string;
+  status: "available" | "occupied";
+  created_at: string;
+};
+
 export type ChatResp = {
   session_id: string; reply: string; ready: boolean;
   request_id?: string | null; parsed?: Record<string, any> | null;
@@ -85,6 +108,28 @@ export const api = {
     by_department: Record<string, { name: string; active: number }>;
   }>("/admin/stats"),
   departments: () => request<{ code: string; name: string }[]>("/meta/departments"),
+
+  // Public reservation (no auth required)
+  createReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; room_number?: string }) =>
+    request<Reservation>("/reservations", { method: "POST", body: JSON.stringify(b) }),
+  checkin: (b: { email: string; access_code: string; new_password: string }) =>
+    request<AuthOut>("/checkin", { method: "POST", body: JSON.stringify(b) }),
+
+  // Admin reservations
+  listReservations: () => request<Reservation[]>("/admin/reservations"),
+  adminCreateReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; room_number?: string }) =>
+    request<Reservation>("/admin/reservations", { method: "POST", body: JSON.stringify(b) }),
+  assignRoom: (id: string, room_number: string) =>
+    request<Reservation>(`/admin/reservations/${id}/assign-room`, { method: "POST", body: JSON.stringify({ room_number }) }),
+  approveCheckin: (id: string) => request<Reservation>(`/admin/reservations/${id}/checkin`, { method: "POST" }),
+  completeReservation: (id: string) => request<Reservation>(`/admin/reservations/${id}/complete`, { method: "POST" }),
+  cancelReservation: (id: string) => request<Reservation>(`/admin/reservations/${id}/cancel`, { method: "POST" }),
+
+  // Admin rooms
+  listRooms: () => request<Room[]>("/admin/rooms"),
+  createRoom: (b: { room_number: string; type?: string }) =>
+    request<Room>("/admin/rooms", { method: "POST", body: JSON.stringify(b) }),
+  deleteRoom: (id: string) => request<{ ok: boolean }>(`/admin/rooms/${id}`, { method: "DELETE" }),
 };
 
 export async function transcribeAudio(uri: string): Promise<string> {

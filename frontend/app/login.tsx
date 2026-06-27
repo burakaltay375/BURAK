@@ -77,8 +77,21 @@ export default function Login() {
               {loading ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.btnText}>Giriş Yap</Text>}
             </Pressable>
 
+            <View style={s.divider}><View style={s.dividerLine} /><Text style={s.dividerText}>veya</Text><View style={s.dividerLine} /></View>
+
+            <View style={s.publicRow}>
+              <Pressable testID="goto-reserve-button" onPress={() => router.push("/reserve")} style={s.publicBtn}>
+                <Text style={s.publicBtnTitle}>Rezervasyon Yap</Text>
+                <Text style={s.publicBtnSub}>Şifresiz · 30 saniye</Text>
+              </Pressable>
+              <Pressable testID="goto-checkin-button" onPress={() => router.push("/checkin")} style={s.publicBtn}>
+                <Text style={s.publicBtnTitle}>Otele Giriş</Text>
+                <Text style={s.publicBtnSub}>Rezervasyon kodu ile</Text>
+              </Pressable>
+            </View>
+
             <Pressable testID="goto-register-button" onPress={() => router.push("/register")} style={s.linkBtn}>
-              <Text style={s.linkText}>Hesabın yok mu? Kayıt ol</Text>
+              <Text style={s.linkText}>Personel/Yönetici? Hesap oluştur</Text>
             </Pressable>
 
             <View style={s.demoRow}>
@@ -114,6 +127,13 @@ const s = StyleSheet.create({
   linkBtn: { alignItems: "center", paddingVertical: SPACING.md },
   linkText: { color: COLORS.brand, fontSize: 14 },
   err: { color: COLORS.error, fontSize: 14, textAlign: "center" },
+  divider: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, marginVertical: SPACING.md },
+  dividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
+  dividerText: { color: COLORS.onSurfaceTertiary, fontSize: 11, letterSpacing: 2, textTransform: "uppercase" },
+  publicRow: { flexDirection: "row", gap: SPACING.sm },
+  publicBtn: { flex: 1, backgroundColor: COLORS.surfaceSecondary, borderRadius: RADIUS.md, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.brand, alignItems: "center", gap: 4 },
+  publicBtnTitle: { color: COLORS.brand, fontSize: 14, fontWeight: "700" },
+  publicBtnSub: { color: COLORS.onSurfaceTertiary, fontSize: 11 },
   demoRow: { flexDirection: "row", gap: SPACING.sm, justifyContent: "center", marginTop: SPACING.md },
   demoChip: { backgroundColor: COLORS.surfaceTertiary, borderRadius: RADIUS.pill, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm, borderWidth: 1, borderColor: COLORS.border },
   demoText: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
