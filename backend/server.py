@@ -119,8 +119,13 @@ class RequestOut(BaseModel):
     status: Literal["ALINDI", "PERSONEL_GIDIYOR", "TAMAMLANDI", "REDDEDILDI"]
     assigned_staff_id: Optional[str] = None
     assigned_staff_name: Optional[str] = None
+    proof_photo: Optional[str] = None
+    completed_at: Optional[str] = None
     created_at: str
     updated_at: str
+
+class CompleteIn(BaseModel):
+    proof_photo: str  # base64 data URI or raw base64
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -171,6 +176,8 @@ def public_request(r: dict) -> RequestOut:
         zaman=r["zaman"], detay=r["detay"], oncelik=r["oncelik"], status=r["status"],
         assigned_staff_id=r.get("assigned_staff_id"),
         assigned_staff_name=r.get("assigned_staff_name"),
+        proof_photo=r.get("proof_photo"),
+        completed_at=r.get("completed_at"),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -492,9 +499,9 @@ async def active_jobs(u: dict = Depends(get_current_user)):
     ).sort("updated_at", -1).to_list(200)
     return [public_request(d) for d in docs]
 
-async def _update_status(req_id: str, status: str, staff: Optional[dict]):
-    update = {"status": status, "updated_at": now_iso()}
-    if status == "PERSONEL_GIDIYOR" and staff:
+async def _update_status(req_id: str, new_status: str, staff: Optional[dict]):
+    update = {"status": new_status, "updated_at": now_iso()}
+    if new_status == "PERSONEL_GIDIYOR" and staff:
         update["assigned_staff_id"] = staff["id"]
         update["assigned_staff_name"] = staff["name"]
     r = await db.requests.find_one_and_update(
@@ -532,7 +539,7 @@ async def reject_request(req_id: str, u: dict = Depends(get_current_user)):
     return public_request(r)
 
 @api.post("/requests/{req_id}/complete", response_model=RequestOut)
-async def complete_request(req_id: str, u: dict = Depends(get_current_user)):
+async def complete_request(req_id: str, body: CompleteIn, u: dict = Depends(get_current_user)):
     if u["role"] != "staff":
         raise HTTPException(403, "Sadece personel")
     r = await db.requests.find_one({"id": req_id}, {"_id": 0})
@@ -540,7 +547,24 @@ async def complete_request(req_id: str, u: dict = Depends(get_current_user)):
         raise HTTPException(404, "Talep bulunamadı")
     if r["assigned_staff_id"] != u["id"]:
         raise HTTPException(403, "Bu görev sizin değil")
-    r = await _update_status(req_id, "TAMAMLANDI", u)
+    if r["status"] != "PERSONEL_GIDIYOR":
+        raise HTTPException(400, "Görev aktif değil")
+    proof = (body.proof_photo or "").strip()
+    if not proof:
+        raise HTTPException(400, "Kanıt fotoğrafı zorunludur")
+    # Normalize to data URI if raw base64
+    if not proof.startswith("data:"):
+        proof = f"data:image/jpeg;base64,{proof}"
+    if len(proof) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Fotoğraf çok büyük (maks 8MB)")
+    update = {
+        "status": "TAMAMLANDI",
+        "updated_at": now_iso(),
+        "completed_at": now_iso(),
+        "proof_photo": proof,
+    }
+    await db.requests.update_one({"id": req_id}, {"$set": update})
+    r = await db.requests.find_one({"id": req_id}, {"_id": 0})
     return public_request(r)
 
 # --------------------------------------------------------------------------

@@ -51,6 +51,8 @@ export type RequestItem = {
   oncelik: "DUSUK" | "ORTA" | "YUKSEK";
   status: "ALINDI" | "PERSONEL_GIDIYOR" | "TAMAMLANDI" | "REDDEDILDI";
   assigned_staff_id?: string | null; assigned_staff_name?: string | null;
+  proof_photo?: string | null;
+  completed_at?: string | null;
   created_at: string; updated_at: string;
 };
 
@@ -72,7 +74,11 @@ export const api = {
   activeJobs: () => request<RequestItem[]>("/requests/active"),
   accept: (id: string) => request<RequestItem>(`/requests/${id}/accept`, { method: "POST" }),
   reject: (id: string) => request<RequestItem>(`/requests/${id}/reject`, { method: "POST" }),
-  complete: (id: string) => request<RequestItem>(`/requests/${id}/complete`, { method: "POST" }),
+  complete: (id: string, proof_photo: string) =>
+    request<RequestItem>(`/requests/${id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ proof_photo }),
+    }),
   adminAll: () => request<RequestItem[]>("/admin/requests"),
   adminStats: () => request<{
     total: number; active: number; completed: number; urgent: number;
