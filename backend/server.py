@@ -171,6 +171,18 @@ class ReservationOut(BaseModel):
     created_at: str
     updated_at: str
 
+class HotelCreateIn(BaseModel):
+    hotel_name: str
+    city: str
+    address: Optional[str] = None
+
+class HotelOut(BaseModel):
+    id: str
+    hotel_name: str
+    city: str
+    address: Optional[str] = None
+    created_at: str
+
 class RoomIn(BaseModel):
     room_number: str
     type: Optional[str] = "Standard"
