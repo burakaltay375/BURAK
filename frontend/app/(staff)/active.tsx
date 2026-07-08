@@ -111,7 +111,7 @@ export default function StaffActive() {
               style={({ pressed }) => [s.btn, s.btnComplete, pressed && { opacity: 0.85 }]}
             >
               <Ionicons name="camera" size={18} color={COLORS.onBrandPrimary} />
-              <Text style={s.btnText}>Fotoğraf Çek &amp; Tamamla</Text>
+              <Text style={s.btnText}>Fotoğraf Çek & Tamamla</Text>
             </Pressable>
           </View>
         )}
@@ -147,7 +147,7 @@ export default function StaffActive() {
                 style={[s.modalBtn, s.modalBtnPrimary]}
                 disabled={busyId !== null}
               >
-                {busyId ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.modalBtnText}>Onayla &amp; Gönder</Text>}
+                {busyId ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.modalBtnText}>Onayla & Gönder</Text>}
               </Pressable>
             </View>
           </View>

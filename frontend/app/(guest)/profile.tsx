@@ -27,9 +27,15 @@ export default function Profile() {
       </View>
 
       <View style={s.info}>
-        <Row label="Rol" value={user.role === "guest" ? "Misafir" : user.role === "staff" ? "Personel" : "Yönetici"} />
+        <Row label="Rol" value={roleLabel(user.role)} />
         {user.room_no && <Row label="Oda" value={user.room_no} />}
         {user.department && <Row label="Departman" value={DEPT_LABEL[user.department] ?? user.department} />}
+        {user.gender && <Row label="Cinsiyet" value={user.gender} />}
+        {user.birth_date && <Row label="Doğum Tarihi" value={user.birth_date} />}
+        {user.age !== undefined && user.age !== null && <Row label="Yaş" value={String(user.age)} />}
+        {user.nationality && <Row label="Uyruk" value={user.nationality} />}
+        {user.country && <Row label="Ülke" value={user.country} />}
+        {user.region_city && <Row label="Bölge / Şehir" value={user.region_city} />}
       </View>
 
       <Pressable testID="logout-button" onPress={logout} style={s.logout}>
@@ -47,6 +53,13 @@ function Row({ label, value }: { label: string; value: string }) {
       <Text style={s.rowValue}>{value}</Text>
     </View>
   );
+}
+
+function roleLabel(role: string) {
+  if (role === "system_admin") return "Sistem Yöneticisi";
+  if (role === "hotel_manager") return "Hotel Manager";
+  if (role === "staff") return "Personel";
+  return "Misafir";
 }
 
 const s = StyleSheet.create({

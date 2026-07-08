@@ -1,11 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api, getToken, setToken, User } from "./api";
+import { normalizeRole } from "./roles";
+
+function withNormalizedRole(user: User): User {
+  const role = normalizeRole(user.role);
+  return role ? { ...user, role } : user;
+}
 
 type AuthCtx = {
   user: User | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<User>;
-  signUp: (b: { email: string; password: string; name: string; role: "guest" | "staff" | "admin"; department?: string; room_no?: string }) => Promise<User>;
+  signIn: (email: string, password: string, selectedHotelId?: string | null) => Promise<User>;
+  signUp: (b: { email: string; password: string; name: string; role: "guest"; room_no?: string }) => Promise<User>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -21,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!t) { setUser(null); setLoading(false); return; }
     try {
       const u = await api.me();
-      setUser(u);
+      setUser(withNormalizedRole(u));
     } catch {
       await setToken(null);
       setUser(null);
@@ -32,18 +38,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const signIn = async (email: string, password: string) => {
-    const { token, user } = await api.login(email, password);
+  const signIn = async (email: string, password: string, selectedHotelId?: string | null) => {
+    const { token, user } = await api.login(email, password, selectedHotelId);
     await setToken(token);
-    setUser(user);
-    return user;
+    const normalized = withNormalizedRole(user);
+    const withHotelContext = normalized.role === "system_admin" && selectedHotelId
+      ? { ...normalized, hotel_id: selectedHotelId, hotelId: selectedHotelId }
+      : normalized;
+    setUser(withHotelContext);
+    return withHotelContext;
   };
 
   const signUp: AuthCtx["signUp"] = async (b) => {
     const { token, user } = await api.register(b);
     await setToken(token);
-    setUser(user);
-    return user;
+    const normalized = withNormalizedRole(user);
+    setUser(normalized);
+    return normalized;
   };
 
   const signOut = async () => { await setToken(null); setUser(null); };

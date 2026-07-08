@@ -73,7 +73,7 @@ export default function Reserve() {
               <Row label="Gece" value={`${nightsBetween(result.check_in_date, result.check_out_date)} gece`} />
             )}
             <Row label="Durum" value="Beklemede (otele check-in bekleniyor)" />
-            <Row label="E-posta" value={result.email_sent ? "Gönderildi ✓" : "Sandbox / log-only"} />
+            <Row label="E-posta Bildirimi" value={result.email_sent ? "Gönderildi ✓" : "Sandbox / log-only"} />
           </View>
           <Pressable testID="goto-login-from-success" onPress={() => router.replace("/login")} style={s.btn}>
             <Text style={s.btnText}>Giriş Ekranına Dön</Text>

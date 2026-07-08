@@ -9,27 +9,33 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useAudioRecorder, AudioModule, RecordingPresets } from "expo-audio";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/src/auth";
-import { api, transcribeAudio, ChatResp } from "@/src/api";
-import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL } from "@/src/theme";
+import { api, transcribeAudio, ChatResp, type HotelServices } from "@/src/api";
+import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, SERVICE_LABELS } from "@/src/theme";
 
 type Msg = { role: "user" | "assistant"; content: string; parsed?: any };
 
 const AI_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxhaSUyMGFzc2lzdGFudCUyMG1pbmltYWxpc3QlMjBhdmF0YXIlMjAzZHxlbnwwfHx8fDE3ODE4Njg2NTl8MA&ixlib=rb-4.1.0&q=85";
 
 const SUGGESTIONS = [
-  "Oda servisi: 2 espresso ve tost",
-  "Kuru temizleme talebi",
-  "Klima çalışmıyor, yardım edin",
-  "Ek havlu lütfen",
+  { text: "Oda servisi: 2 espresso ve tost", service: "room_service" },
+  { text: "Kuru temizleme talebi", service: "laundry" },
+  { text: "Klima çalışmıyor, yardım edin", service: null },
+  { text: "Ek havlu lütfen", service: null },
 ];
 
 export default function GuestChat() {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Msg[]>([
-    { role: "assistant", content: `Hoş geldiniz, ${user?.name?.split(" ")[0] ?? "Misafirimiz"}. Ben Astoria Konsiyerj. Talebinizi yazabilir ya da mikrofona basılı tutarak söyleyebilirsiniz.` },
+    {
+      role: "assistant",
+      content: user?.role === "staff"
+        ? `Merhaba, ${user?.name?.split(" ")[0] ?? "ekip arkadaşım"}. Ben Astoria AI Asistan. Personel sohbetleri not ve yardım içindir; operasyon talebi sadece misafir sohbetinden oluşturulur.`
+        : `Hoş geldiniz, ${user?.name?.split(" ")[0] ?? "Misafirimiz"}. Ben Astoria AI Asistan. Mesajınızı yazabilir ya da mikrofona basılı tutarak söyleyebilirsiniz.`,
+    },
   ]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
+  const [services, setServices] = useState<HotelServices | null>(null);
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -38,7 +44,13 @@ export default function GuestChat() {
 
   useEffect(() => {
     AudioModule.requestRecordingPermissionsAsync().catch(() => {});
+    api.myHotelServices().then((r) => setServices(r.services)).catch(() => setServices(null));
   }, []);
+
+  const enabledServices = Object.entries(services ?? {})
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => SERVICE_LABELS[key as keyof typeof SERVICE_LABELS])
+    .filter(Boolean);
 
   const send = async (text?: string) => {
     const msg = (text ?? input).trim();
@@ -96,9 +108,23 @@ export default function GuestChat() {
         <Image source={{ uri: AI_AVATAR }} style={s.avatar} contentFit="cover" />
         <View style={{ flex: 1 }}>
           <Text style={s.headerTitle}>Astoria Konsiyerj</Text>
-          <Text style={s.headerSub}>Her zaman hizmetinizde · Oda {user?.room_no ?? "—"}</Text>
+          <Text style={s.headerSub}>
+            {user?.role === "staff"
+              ? `Personel AI · ${DEPT_LABEL[user.department ?? ""] ?? "Departman"}`
+              : `Her zaman hizmetinizde · Oda ${user?.room_no ?? "—"}`}
+          </Text>
         </View>
       </View>
+      {!!enabledServices.length && (
+        <View style={s.servicesRow}>
+          <Text style={s.servicesLabel}>Aktif servisler:</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.servicesChips}>
+            {enabledServices.map((label) => (
+              <Text key={label} style={s.serviceChip}>{label}</Text>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}>
         <ScrollView ref={scrollRef} contentContainerStyle={s.thread} keyboardShouldPersistTaps="handled">
@@ -125,9 +151,9 @@ export default function GuestChat() {
           )}
           {messages.length <= 1 && (
             <View style={s.suggestRow}>
-              {SUGGESTIONS.map((q) => (
-                <Pressable key={q} testID={`suggestion-${q}`} onPress={() => send(q)} style={s.suggestChip}>
-                  <Text style={s.suggestText}>{q}</Text>
+              {SUGGESTIONS.filter((q) => !q.service || services?.[q.service] !== false).map((q) => (
+                <Pressable key={q.text} testID={`suggestion-${q.text}`} onPress={() => send(q.text)} style={s.suggestChip}>
+                  <Text style={s.suggestText}>{q.text}</Text>
                 </Pressable>
               ))}
             </View>
@@ -167,6 +193,10 @@ const s = StyleSheet.create({
   avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.surfaceTertiary },
   headerTitle: { color: COLORS.onSurface, fontSize: 16, fontWeight: "700", fontFamily: TYPE.display },
   headerSub: { color: COLORS.onSurfaceTertiary, fontSize: 12, marginTop: 2 },
+  servicesRow: { backgroundColor: COLORS.surfaceSecondary, borderBottomWidth: 1, borderBottomColor: COLORS.border, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm, gap: SPACING.xs },
+  servicesLabel: { color: COLORS.onSurfaceTertiary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase" },
+  servicesChips: { gap: SPACING.sm },
+  serviceChip: { color: COLORS.brand, backgroundColor: COLORS.brandTertiary, borderRadius: RADIUS.pill, overflow: "hidden", paddingHorizontal: SPACING.md, paddingVertical: SPACING.xs, fontSize: 11, fontWeight: "700" },
   thread: { padding: SPACING.lg, gap: SPACING.md, paddingBottom: SPACING.xl },
   bubbleRow: { flexDirection: "row" },
   userRow: { justifyContent: "flex-end" },

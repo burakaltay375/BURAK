@@ -27,6 +27,22 @@ const STATUS_COLOR: Record<ReservationStatus, string> = {
   cancelled: COLORS.error,
 };
 
+const ROOM_STATUS_LABEL: Record<Room["status"], string> = {
+  available: "Müsait",
+  occupied: "Dolu",
+  cleaning: "Temizlikte",
+  maintenance: "Bakımda",
+  out_of_service: "Kullanım Dışı",
+};
+
+const ROOM_STATUS_COLOR: Record<Room["status"], string> = {
+  available: COLORS.success,
+  occupied: COLORS.warning,
+  cleaning: COLORS.brand,
+  maintenance: COLORS.warning,
+  out_of_service: COLORS.error,
+};
+
 export default function AdminReservations() {
   const [tab, setTab] = useState<Tab>("reservations");
   const [reservations, setReservations] = useState<Reservation[] | null>(null);
@@ -45,6 +61,8 @@ export default function AdminReservations() {
       setReservations(r); setRooms(ro);
     } catch (e: any) {
       setErr(e.message);
+      setReservations([]);
+      setRooms([]);
     }
   }, []);
 
@@ -209,8 +227,8 @@ export default function AdminReservations() {
               </View>
               <Text style={s.roomNum}>{item.room_number}</Text>
               <Text style={s.roomType}>{item.type}</Text>
-              <Text style={[s.roomStatus, { color: item.status === "occupied" ? COLORS.warning : COLORS.success }]}>
-                {item.status === "occupied" ? "Dolu" : "Müsait"}
+              <Text style={[s.roomStatus, { color: ROOM_STATUS_COLOR[item.status] }]}>
+                {ROOM_STATUS_LABEL[item.status]}
               </Text>
             </View>
           )}

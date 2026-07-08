@@ -12,11 +12,21 @@ type Stats = {
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
-  const load = useCallback(async () => { try { setStats(await api.adminStats()); } catch {} }, []);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try { setStats(await api.adminStats()); setErr(null); }
+    catch (e: any) { setErr(e.message); }
+  }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { const id = setInterval(load, 5000); return () => clearInterval(id); }, [load]);
 
-  if (!stats) return <SafeAreaView style={s.root}><ActivityIndicator color={COLORS.brand} style={{ flex: 1 }} /></SafeAreaView>;
+  if (!stats) {
+    return (
+      <SafeAreaView style={s.root}>
+        {err ? <Text style={s.err}>{err}</Text> : <ActivityIndicator color={COLORS.brand} style={{ flex: 1 }} />}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="admin-dashboard-screen">
@@ -73,4 +83,5 @@ const s = StyleSheet.create({
   deptBarWrap: { flex: 1, height: 8, borderRadius: 4, backgroundColor: COLORS.surfaceTertiary, overflow: "hidden" },
   deptBar: { height: "100%", backgroundColor: COLORS.brand },
   deptCount: { color: COLORS.brand, fontSize: 14, fontWeight: "700", width: 24, textAlign: "right" },
+  err: { color: COLORS.error, fontSize: 14, padding: SPACING.lg },
 });

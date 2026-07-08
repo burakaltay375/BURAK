@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/auth";
+import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS } from "@/src/theme";
 
 export default function Index() {
@@ -11,9 +12,7 @@ export default function Index() {
   useEffect(() => {
     if (loading) return;
     if (!user) router.replace("/login");
-    else if (user.role === "guest") router.replace("/(guest)/chat");
-    else if (user.role === "staff") router.replace("/(staff)/queue");
-    else router.replace("/(admin)/dashboard");
+    else router.replace(dashboardRouteForRole(user.role));
   }, [user, loading, router]);
 
   return (

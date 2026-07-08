@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View, Text, TextInput, StyleSheet, Pressable, KeyboardAvoidingView,
   Platform, ScrollView, ActivityIndicator,
@@ -7,27 +7,57 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import { api, type Hotel } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 const HERO = "https://images.unsplash.com/photo-1780283575089-eb917a09a5b1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxsdXh1cnklMjBob3RlbCUyMHJlc29ydCUyMGV4dGVyaW9yJTIwbmlnaHR8ZW58MHx8fHwxNzgxODY4NjU5fDA&ixlib=rb-4.1.0&q=85";
 
 export default function Login() {
   const router = useRouter();
-  const { signIn } = useAuth();
+  const { user, loading: authLoading, signIn } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && user) router.replace(dashboardRouteForRole(user.role));
+  }, [user, authLoading, router]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [selectedHotelId, setSelectedHotelId] = useState<string | null>(null);
+  const [hotelsLoading, setHotelsLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setHotelsLoading(true);
+      try {
+        const activeHotels = await api.activeHotels();
+        if (!alive) return;
+        setHotels(activeHotels);
+        setSelectedHotelId((prev) => prev ?? activeHotels[0]?.id ?? null);
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(e?.message || "Aktif oteller yüklenemedi");
+      } finally {
+        if (alive) setHotelsLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   const submit = async () => {
+    if (!selectedHotelId) {
+      setErr("Lütfen bir otel seçin");
+      return;
+    }
     setErr(null); setLoading(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const u = await signIn(email.trim(), password);
-      if (u.role === "guest") router.replace("/(guest)/chat");
-      else if (u.role === "staff") router.replace("/(staff)/queue");
-      else router.replace("/(admin)/dashboard");
+      const u = await signIn(email.trim(), password, selectedHotelId);
+      router.replace(dashboardRouteForRole(u.role));
     } catch (e: any) {
       setErr(e.message);
     } finally { setLoading(false); }
@@ -36,7 +66,7 @@ export default function Login() {
   const fillDemo = (which: "guest" | "staff" | "admin") => {
     if (which === "guest") { setEmail("misafir@hotel.com"); setPassword("misafir123"); }
     if (which === "staff") { setEmail("kurutemizleme@hotel.com"); setPassword("personel123"); }
-    if (which === "admin") { setEmail("admin@hotel.com"); setPassword("admin123"); }
+    if (which === "admin") { setEmail("manager@hotel.com"); setPassword("manager123"); }
   };
 
   return (
@@ -59,6 +89,36 @@ export default function Login() {
 
             {err && <Text style={s.err} testID="login-error">{err}</Text>}
 
+            <View style={s.hotelsSection}>
+              <Text style={s.hotelsTitle}>Anlaşmalı Oteller</Text>
+              {hotelsLoading ? (
+                <ActivityIndicator color={COLORS.brand} />
+              ) : hotels.length === 0 ? (
+                <Text style={s.hotelEmptyText}>Aktif anlaşmalı otel bulunamadı.</Text>
+              ) : (
+                <View style={s.hotelsRow}>
+                  {hotels.map((hotel) => {
+                    const selected = selectedHotelId === hotel.id;
+                    return (
+                      <Pressable
+                        key={hotel.id}
+                        testID={`hotel-option-${hotel.id}`}
+                        onPress={() => setSelectedHotelId(hotel.id)}
+                        style={[s.hotelChip, selected && s.hotelChipSelected]}
+                      >
+                        <Text style={[s.hotelChipText, selected && s.hotelChipTextSelected]}>
+                          {hotel.hotel_name}
+                        </Text>
+                        <Text style={[s.hotelCityText, selected && s.hotelChipTextSelected]}>
+                          {hotel.city}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
             <TextInput
               testID="login-email-input"
               placeholder="E-posta"
@@ -73,7 +133,7 @@ export default function Login() {
               secureTextEntry value={password} onChangeText={setPassword} style={s.input}
             />
 
-            <Pressable testID="login-submit-button" onPress={submit} disabled={loading} style={({ pressed }) => [s.btn, pressed && s.btnPressed]}>
+            <Pressable testID="login-submit-button" onPress={submit} disabled={loading || hotelsLoading || !selectedHotelId} style={({ pressed }) => [s.btn, pressed && s.btnPressed]}>
               {loading ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.btnText}>Giriş Yap</Text>}
             </Pressable>
 
@@ -91,7 +151,7 @@ export default function Login() {
             </View>
 
             <Pressable testID="goto-register-button" onPress={() => router.push("/register")} style={s.linkBtn}>
-              <Text style={s.linkText}>Personel/Yönetici? Hesap oluştur</Text>
+              <Text style={s.linkText}>Misafir hesabı oluştur</Text>
             </Pressable>
 
             <View style={s.demoRow}>
@@ -116,6 +176,27 @@ const s = StyleSheet.create({
   form: { gap: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   subtitle: { fontSize: 14, color: COLORS.onSurfaceSecondary, marginBottom: SPACING.md },
+  hotelsSection: { gap: SPACING.sm },
+  hotelsTitle: { color: COLORS.onSurfaceSecondary, fontSize: 13, letterSpacing: 0.3 },
+  hotelsRow: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
+  hotelChip: {
+    backgroundColor: COLORS.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    minWidth: 120,
+    gap: 2,
+  },
+  hotelChipSelected: {
+    borderColor: COLORS.brand,
+    backgroundColor: COLORS.surfaceTertiary,
+  },
+  hotelChipText: { color: COLORS.onSurface, fontSize: 13, fontWeight: "700" },
+  hotelCityText: { color: COLORS.onSurfaceTertiary, fontSize: 11 },
+  hotelChipTextSelected: { color: COLORS.brand },
+  hotelEmptyText: { color: COLORS.onSurfaceTertiary, fontSize: 13 },
   input: {
     backgroundColor: COLORS.surfaceSecondary, color: COLORS.onSurface,
     borderRadius: RADIUS.md, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,

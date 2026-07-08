@@ -64,7 +64,7 @@ export default function AdminAll() {
           <Pressable style={s.closeBtn} onPress={() => setProofItem(null)} testID="proof-modal-close">
             <Ionicons name="close" size={28} color="#fff" />
           </Pressable>
-          <ScrollView contentContainerStyle={s.modalScroll} maximumZoomScale={3} minimumZoomScale={1}>
+          <ScrollView contentContainerStyle={s.modalScroll}>
             {proofItem?.proof_photo && (
               <Image source={{ uri: proofItem.proof_photo }} style={s.fullImage} contentFit="contain" />
             )}

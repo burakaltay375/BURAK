@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import {
   View, Text, TextInput, StyleSheet, Pressable, KeyboardAvoidingView,
   Platform, ScrollView, ActivityIndicator,
@@ -9,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { api, setToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 export default function Checkin() {
@@ -36,7 +38,7 @@ export default function Checkin() {
       await setToken(r.token);
       await refresh();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace("/");
+      router.replace(dashboardRouteForRole(r.user.role));
     } catch (e: any) {
       setErr(e.message);
     } finally { setLoading(false); }
@@ -73,7 +75,7 @@ export default function Checkin() {
             disabled={loading || !email.trim() || !code.trim() || !password || !confirm}
             style={({ pressed }) => [s.btn, pressed && { opacity: 0.85 }, (loading || !email.trim() || !code.trim() || !password || !confirm) && { opacity: 0.5 }]}
           >
-            {loading ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.btnText}>Check-in &amp; Giriş</Text>}
+            {loading ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.btnText}>Check-in & Giriş</Text>}
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -81,7 +83,7 @@ export default function Checkin() {
   );
 }
 
-function Field({ icon, children }: { icon: keyof typeof Ionicons.glyphMap; children: React.ReactNode }) {
+function Field({ icon, children }: { icon: keyof typeof Ionicons.glyphMap; children: ReactNode }) {
   return (
     <View style={s.field}>
       <Ionicons name={icon} size={18} color={COLORS.brand} style={{ marginLeft: SPACING.md }} />

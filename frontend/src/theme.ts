@@ -46,4 +46,24 @@ export const DEPT_LABEL: Record<string, string> = {
   teknik_destek: "Teknik Destek",
   housekeeping: "Housekeeping",
   vale: "Vale",
+  concierge: "Concierge",
 };
+
+export const SERVICE_LABELS = {
+  spa: "SPA",
+  luggage: "Bagaj Hizmeti",
+  valet: "Vale Hizmeti",
+  room_service: "Oda Servisi",
+  restaurant: "Restoran",
+  bar: "Bar",
+  pool: "Havuz",
+  fitness: "Fitness",
+  turkish_bath: "Türk Hamamı",
+  sauna: "Sauna",
+  airport_transfer: "Havalimanı Transferi",
+  vip: "VIP Hizmeti",
+  kids_club: "Çocuk Kulübü",
+  meeting_room: "Toplantı Salonu",
+  laundry: "Çamaşırhane",
+  concierge: "Concierge Hizmeti",
+} as const;

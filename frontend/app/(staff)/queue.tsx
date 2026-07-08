@@ -3,28 +3,31 @@ import { View, Text, StyleSheet, FlatList, Pressable, RefreshControl, ActivityIn
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { api, RequestItem } from "@/src/api";
+import { api, RequestItem, type HotelServices } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, PRIORITY_COLOR } from "@/src/theme";
+import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, PRIORITY_COLOR, SERVICE_LABELS } from "@/src/theme";
 
 export default function StaffQueue() {
   const { user } = useAuth();
   const [items, setItems] = useState<RequestItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [filterUrgent, setFilterUrgent] = useState(false);
+  const [services, setServices] = useState<HotelServices | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const prevCount = useRef(0);
 
   const load = useCallback(async () => {
     try {
-      const data = await api.deptQueue();
+      const [data, serviceData] = await Promise.all([api.deptQueue(), api.myHotelServices()]);
       // Sound/haptic if new task arrived
       if (prevCount.current && data.length > prevCount.current) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
       prevCount.current = data.length;
       setItems(data);
-    } catch { setItems([]); }
+      setServices(serviceData.services);
+    } catch (e: any) { setErr(e.message); setItems([]); }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -34,13 +37,17 @@ export default function StaffQueue() {
   }, [load]);
 
   const accept = async (id: string) => {
+    setErr(null);
     setBusyId(id);
     try { await api.accept(id); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); await load(); }
+    catch (e: any) { setErr(e.message); }
     finally { setBusyId(null); }
   };
   const reject = async (id: string) => {
+    setErr(null);
     setBusyId(id);
     try { await api.reject(id); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); await load(); }
+    catch (e: any) { setErr(e.message); }
     finally { setBusyId(null); }
   };
 
@@ -48,12 +55,22 @@ export default function StaffQueue() {
     return <SafeAreaView style={s.root}><ActivityIndicator color={COLORS.brand} style={{ flex: 1 }} /></SafeAreaView>;
   }
   const filtered = filterUrgent ? items.filter((r) => r.oncelik === "YUKSEK") : items;
+  const enabledServices = Object.entries(services ?? {})
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => SERVICE_LABELS[key as keyof typeof SERVICE_LABELS])
+    .filter(Boolean);
 
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="staff-queue-screen">
       <View style={s.header}>
         <Text style={s.title}>Bekleyen İşler</Text>
         <Text style={s.sub}>{DEPT_LABEL[user?.department ?? ""] ?? "Departman"} · {items.length} talep</Text>
+        {!!enabledServices.length && (
+          <View style={s.servicesRow}>
+            {enabledServices.map((label) => <Text key={label} style={s.serviceChip}>{label}</Text>)}
+          </View>
+        )}
+        {err && <Text style={s.err}>{err}</Text>}
         <View style={s.chipsRow}>
           <Pressable testID="filter-all-chip" onPress={() => setFilterUrgent(false)} style={[s.chip, !filterUrgent && s.chipActive]}>
             <Text style={[s.chipText, !filterUrgent && s.chipTextActive]}>Hepsi</Text>
@@ -106,6 +123,12 @@ export default function StaffQueue() {
           </View>
         )}
       />
+      {err && (
+        <View style={s.toast} testID="queue-error">
+          <Text style={s.toastText}>{err}</Text>
+          <Pressable onPress={() => setErr(null)}><Text style={s.toastClose}>Kapat</Text></Pressable>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -115,6 +138,9 @@ const s = StyleSheet.create({
   header: { padding: SPACING.lg, paddingBottom: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   sub: { fontSize: 13, color: COLORS.onSurfaceTertiary, marginTop: 4 },
+  servicesRow: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm, marginTop: SPACING.sm },
+  serviceChip: { color: COLORS.brand, backgroundColor: COLORS.brandTertiary, borderRadius: RADIUS.pill, overflow: "hidden", paddingHorizontal: SPACING.md, paddingVertical: SPACING.xs, fontSize: 11, fontWeight: "700" },
+  err: { color: COLORS.error, fontSize: 12, marginTop: SPACING.sm },
   chipsRow: { flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md },
   chip: { paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.surfaceSecondary, height: 36, justifyContent: "center" },
   chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
@@ -138,4 +164,7 @@ const s = StyleSheet.create({
   empty: { padding: SPACING.xl2, alignItems: "center", gap: SPACING.sm },
   emptyTitle: { color: COLORS.onSurface, fontSize: 18, fontFamily: TYPE.display },
   emptySub: { color: COLORS.onSurfaceTertiary, fontSize: 13 },
+  toast: { position: "absolute", left: 16, right: 16, bottom: 24, backgroundColor: COLORS.error, padding: SPACING.md, borderRadius: RADIUS.md, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: SPACING.md },
+  toastText: { color: "#fff", flex: 1, fontSize: 13 },
+  toastClose: { color: "#fff", fontSize: 12, fontWeight: "700" },
 });
