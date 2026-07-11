@@ -1,15 +1,20 @@
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, FlatList, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { api, Room } from "@/src/api";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
-const STATUS: Room["status"][] = ["available", "occupied", "cleaning", "maintenance", "out_of_service"];
+const STATUS_LABEL: Record<Room["status"], string> = {
+  available: "Boş",
+  reserved: "Rezerve",
+  occupied: "Dolu",
+  cleaning: "Temizlikte",
+  maintenance: "Bakımda",
+};
 
 export default function StaffRooms() {
   const [rooms, setRooms] = useState<Room[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -23,18 +28,6 @@ export default function StaffRooms() {
     });
   }, [load]));
 
-  const update = async (room: Room, status: Room["status"]) => {
-    setBusy(room.id);
-    try {
-      await api.updateRoomStatus(room.id, status);
-      await load();
-    } catch (e: any) {
-      setErr(e.message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (!rooms) {
     return <SafeAreaView style={s.root}><ActivityIndicator color={COLORS.brand} style={{ flex: 1 }} /></SafeAreaView>;
   }
@@ -43,7 +36,7 @@ export default function StaffRooms() {
     <SafeAreaView style={s.root} edges={["top"]} testID="staff-rooms-screen">
       <View style={s.header}>
         <Text style={s.title}>Odalar</Text>
-        <Text style={s.sub}>{rooms.length} oda · durum güncelle</Text>
+        <Text style={s.sub}>{rooms.length} oda · sadece görüntüleme</Text>
         {err && <Text style={s.err}>{err}</Text>}
       </View>
       <FlatList
@@ -54,16 +47,11 @@ export default function StaffRooms() {
           <View style={s.card} testID={`staff-room-${item.id}`}>
             <View style={s.cardTop}>
               <Text style={s.room}>Oda {item.room_number}</Text>
-              <Text style={s.status}>{item.status}</Text>
+              <Text style={s.status}>{STATUS_LABEL[item.status]}</Text>
             </View>
-            <Text style={s.type}>{item.type}</Text>
-            <View style={s.chips}>
-              {STATUS.map((st) => (
-                <Pressable key={st} disabled={busy === item.id} onPress={() => update(item, st)} style={[s.chip, item.status === st && s.chipActive]}>
-                  <Text style={[s.chipText, item.status === st && s.chipTextActive]}>{st}</Text>
-                </Pressable>
-              ))}
-            </View>
+            <Text style={s.type}>{item.room_name || item.room_type} · Kat {item.floor || "—"} · {item.capacity} kişi</Text>
+            <Text style={s.type}>₺{Math.round(item.price_per_night).toLocaleString("tr-TR")} / Gece</Text>
+            {!!item.current_guest_name && <Text style={s.guest}>Misafir: {item.current_guest_name}</Text>}
           </View>
         )}
       />
@@ -83,9 +71,5 @@ const s = StyleSheet.create({
   room: { color: COLORS.onSurface, fontSize: 16, fontWeight: "700", fontFamily: TYPE.display },
   status: { color: COLORS.brand, fontSize: 12, fontWeight: "700" },
   type: { color: COLORS.onSurfaceTertiary, fontSize: 12 },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
-  chip: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.pill, paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, backgroundColor: COLORS.surface },
-  chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
-  chipText: { color: COLORS.onSurfaceSecondary, fontSize: 11 },
-  chipTextActive: { color: COLORS.onBrandPrimary, fontWeight: "700" },
+  guest: { color: COLORS.onSurfaceSecondary, fontSize: 12, fontWeight: "700" },
 });

@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { api, Reservation, Room, ReservationStatus } from "@/src/api";
+import { api, IdentityAlert, Reservation, Room, ReservationStatus } from "@/src/api";
 import { autoFormatDate, isValidISODate, formatTrDate, nightsBetween } from "@/src/dates";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
@@ -29,36 +29,41 @@ const STATUS_COLOR: Record<ReservationStatus, string> = {
 
 const ROOM_STATUS_LABEL: Record<Room["status"], string> = {
   available: "Müsait",
+  reserved: "Rezerve",
   occupied: "Dolu",
   cleaning: "Temizlikte",
   maintenance: "Bakımda",
-  out_of_service: "Kullanım Dışı",
 };
 
 const ROOM_STATUS_COLOR: Record<Room["status"], string> = {
   available: COLORS.success,
-  occupied: COLORS.warning,
-  cleaning: COLORS.brand,
-  maintenance: COLORS.warning,
-  out_of_service: COLORS.error,
+  reserved: COLORS.error,
+  occupied: COLORS.error,
+  cleaning: COLORS.onSurfaceTertiary,
+  maintenance: COLORS.info,
 };
 
 export default function AdminReservations() {
   const [tab, setTab] = useState<Tab>("reservations");
   const [reservations, setReservations] = useState<Reservation[] | null>(null);
   const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [identityAlerts, setIdentityAlerts] = useState<IdentityAlert[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [newRes, setNewRes] = useState({ open: false, name: "", email: "", phone: "", room: "", checkIn: "", checkOut: "" });
+  const emptyNewRes = { open: false, name: "", email: "", phone: "", room: "", roomId: "", capacity: 2, checkIn: "", checkOut: "", identityRequested: false, memberNames: ["", "", "", ""] };
+  const [newRes, setNewRes] = useState(emptyNewRes);
   const [newRoom, setNewRoom] = useState({ open: false, num: "", type: "Standard" });
   const [assignRoom, setAssignRoom] = useState<{ open: boolean; res?: Reservation; value: string }>({ open: false, value: "" });
+  const [modalRooms, setModalRooms] = useState<Room[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [r, ro] = await Promise.all([api.listReservations(), api.listRooms()]);
+      const [r, ro, alerts] = await Promise.all([api.listReservations(), api.listRooms(), api.managerIdentityAlerts()]);
       setReservations(r); setRooms(ro);
+      setIdentityAlerts(alerts);
     } catch (e: any) {
       setErr(e.message);
       setReservations([]);
@@ -68,6 +73,37 @@ export default function AdminReservations() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { const id = setInterval(load, 8000); return () => clearInterval(id); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    setNewRes((current) => ({ ...current, room: "", roomId: "" }));
+    setModalRooms([]);
+    if (!newRes.open || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut) || (nightsBetween(newRes.checkIn, newRes.checkOut) ?? 0) < 1) return;
+    setRoomsLoading(true);
+    api.adminAvailableRooms({ check_in_date: newRes.checkIn, check_out_date: newRes.checkOut, capacity: newRes.capacity })
+      .then((data) => { if (!cancelled) setModalRooms(data); })
+      .catch((e: any) => { if (!cancelled) { setErr(e.message); setModalRooms([]); } })
+      .finally(() => { if (!cancelled) setRoomsLoading(false); });
+    return () => { cancelled = true; };
+  }, [newRes.open, newRes.checkIn, newRes.checkOut, newRes.capacity]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!assignRoom.open || !assignRoom.res?.check_in_date || !assignRoom.res?.check_out_date) return;
+    setRoomsLoading(true);
+    api.adminAvailableRooms({
+      check_in_date: assignRoom.res.check_in_date,
+      check_out_date: assignRoom.res.check_out_date,
+      capacity: assignRoom.res.capacity || 1,
+    })
+      .then((data) => {
+        if (!cancelled) {
+          const currentRoom = rooms?.find((r) => r.room_number === assignRoom.res?.room_number);
+          setModalRooms(currentRoom && !data.some((r) => r.id === currentRoom.id) ? [currentRoom, ...data] : data);
+        }
+      })
+      .catch((e: any) => { if (!cancelled) { setErr(e.message); setModalRooms([]); } })
+      .finally(() => { if (!cancelled) setRoomsLoading(false); });
+    return () => { cancelled = true; };
+  }, [assignRoom.open, assignRoom.res, rooms]);
 
   const createReservation = async () => {
     setErr(null);
@@ -79,16 +115,26 @@ export default function AdminReservations() {
     }
     setBusy("create-res");
     try {
+      const identityMembers = [
+        { relation: "Misafir", name: newRes.name.trim() },
+        { relation: "Eş", name: newRes.memberNames[1]?.trim() || "" },
+        { relation: "Çocuk 1", name: newRes.memberNames[2]?.trim() || "" },
+        { relation: "Çocuk 2", name: newRes.memberNames[3]?.trim() || "" },
+      ].slice(0, newRes.capacity).filter((m) => m.name);
       await api.adminCreateReservation({
         customer_name: newRes.name.trim(),
         customer_email: newRes.email.trim(),
         customer_phone: newRes.phone.trim(),
         check_in_date: newRes.checkIn,
         check_out_date: newRes.checkOut,
-        room_number: newRes.room.trim() || undefined,
+        capacity: newRes.capacity,
+        room_id: newRes.roomId || undefined,
+        room_number: newRes.room || undefined,
+        identity_verification_requested: newRes.identityRequested,
+        identity_members: newRes.identityRequested ? identityMembers : undefined,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setNewRes({ open: false, name: "", email: "", phone: "", room: "", checkIn: "", checkOut: "" });
+      setNewRes(emptyNewRes);
       await load();
     } catch (e: any) { setErr(e.message); } finally { setBusy(null); }
   };
@@ -96,18 +142,26 @@ export default function AdminReservations() {
   const createRoom = async () => {
     setErr(null); setBusy("create-room");
     try {
-      await api.createRoom({ room_number: newRoom.num.trim(), type: newRoom.type });
+      await api.createRoom({
+        room_number: newRoom.num.trim(),
+        room_type: newRoom.type as Room["room_type"],
+        capacity: 2,
+        price_per_night: 0,
+        is_active: true,
+      });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setNewRoom({ open: false, num: "", type: "Standard" });
       await load();
     } catch (e: any) { setErr(e.message); } finally { setBusy(null); }
   };
 
-  const doAction = async (id: string, action: "approve" | "complete" | "cancel") => {
+  const doAction = async (id: string, action: "approve" | "complete" | "cancel" | "identity-approve" | "identity-reject") => {
     setBusy(id);
     try {
       if (action === "approve") await api.approveCheckin(id);
       else if (action === "complete") await api.completeReservation(id);
+      else if (action === "identity-approve") await api.approveReservationIdentity(id);
+      else if (action === "identity-reject") await api.rejectReservationIdentity(id, "Manager kimlik doğrulamayı başarısız işaretledi");
       else await api.cancelReservation(id);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await load();
@@ -118,7 +172,8 @@ export default function AdminReservations() {
     if (!assignRoom.res || !assignRoom.value.trim()) return;
     setBusy(assignRoom.res.id);
     try {
-      await api.assignRoom(assignRoom.res.id, assignRoom.value.trim());
+      const room = rooms?.find((r) => r.room_number === assignRoom.value.trim());
+      await api.assignRoom(assignRoom.res.id, assignRoom.value.trim(), room?.id);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setAssignRoom({ open: false, value: "" });
       await load();
@@ -137,14 +192,21 @@ export default function AdminReservations() {
   }
 
   const availableRooms = rooms.filter((r) => r.status === "available");
+  const identityAttentionCount = reservations.filter((r) => ["waiting_for_verification", "partially_verified", "verification_failed", "pending_review", "failed"].includes(r.identity_status)).length;
 
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="admin-reservations-screen">
       <View style={s.header}>
         <Text style={s.title}>{tab === "reservations" ? "Rezervasyonlar" : "Odalar"}</Text>
         <Text style={s.sub}>
-          {tab === "reservations" ? `${reservations.length} kayıt` : `${rooms.length} oda · ${availableRooms.length} müsait`}
+          {tab === "reservations" ? `${reservations.length} kayıt${identityAttentionCount ? ` · ${identityAttentionCount} kimlik bildirimi` : ""}` : `${rooms.length} oda · ${availableRooms.length} müsait`}
         </Text>
+        {tab === "reservations" && identityAlerts.length > 0 && (
+          <View style={s.alertBanner}>
+            <Ionicons name="notifications" size={16} color={COLORS.warning} />
+            <Text style={s.alertText}>{identityAlerts[0].title}: {identityAlerts[0].detail}</Text>
+          </View>
+        )}
         <View style={s.tabsRow}>
           <Pressable testID="tab-reservations" onPress={() => setTab("reservations")} style={[s.tab, tab === "reservations" && s.tabActive]}>
             <Text style={[s.tabText, tab === "reservations" && s.tabTextActive]}>Rezervasyonlar</Text>
@@ -183,6 +245,32 @@ export default function AdminReservations() {
                 <Text style={s.codeLbl}>Oda:</Text>
                 <Text style={s.roomVal}>{item.room_number ?? "—"}</Text>
               </View>
+              {item.identity_verification_requested && (
+                <View style={[s.identityCard, (item.identity_status === "verification_failed" || item.identity_status === "failed") && s.identityCardDanger, (item.identity_status === "fully_verified" || item.identity_status === "verified_by_hotel") && s.identityCardOk]}>
+                  <View style={s.identityTop}>
+                    <Ionicons
+                      name={(item.identity_status === "fully_verified" || item.identity_status === "verified_by_hotel") ? "checkmark-circle" : (item.identity_status === "verification_failed" || item.identity_status === "failed") ? "alert-circle" : "time"}
+                      size={16}
+                      color={(item.identity_status === "fully_verified" || item.identity_status === "verified_by_hotel") ? COLORS.success : (item.identity_status === "verification_failed" || item.identity_status === "failed") ? COLORS.error : COLORS.warning}
+                    />
+                    <Text style={s.identityText}>
+                      Kimlik: {(item.identity_status === "fully_verified" || item.identity_status === "verified_by_hotel") ? "Fully Verified · Entry Code Generated" : (item.identity_status === "verification_failed" || item.identity_status === "failed") ? "Verification Failed" : item.identity_status === "partially_verified" ? "Partially Verified" : "Waiting For Verification"}
+                    </Text>
+                  </View>
+                  {!!item.identity_members?.length && <Text style={s.identityMeta}>{item.identity_members.map((m) => `${m.relation}: ${m.name} (${m.status})`).join(" · ")}</Text>}
+                  {item.identity_failure_reason && <Text style={s.identityErr}>{item.identity_failure_reason}</Text>}
+                  {["waiting_for_verification", "partially_verified", "pending_review"].includes(item.identity_status) && (
+                    <View style={s.actionsRow}>
+                      <Pressable testID={`identity-approve-${item.id}`} onPress={() => doAction(item.id, "identity-approve")} disabled={busy === item.id} style={[s.actBtn, s.actBtnPrimary]}>
+                        <Text style={s.actPrimaryText}>Kimliği Onayla ✓</Text>
+                      </Pressable>
+                      <Pressable testID={`identity-reject-${item.id}`} onPress={() => doAction(item.id, "identity-reject")} disabled={busy === item.id} style={[s.actBtn, s.actBtnDanger]}>
+                        <Text style={s.actDangerText}>Kimlik Başarısız</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              )}
               <View style={s.actionsRow}>
                 {item.status === "pending" && (
                   <>
@@ -284,12 +372,59 @@ export default function AdminReservations() {
                   style={[s.input, { flex: 1 }, !!newRes.checkOut && !isValidISODate(newRes.checkOut) && { borderColor: COLORS.error }]}
                 />
               </View>
-              <TextInput testID="new-res-room" placeholder="Oda (opsiyonel)" placeholderTextColor={COLORS.onSurfaceTertiary} keyboardType="numeric" value={newRes.room} onChangeText={(v) => setNewRes({ ...newRes, room: v })} style={s.input} />
+              <Text style={s.modalSub}>Kişi Sayısı</Text>
+              <View style={s.typesRow}>
+                {[1, 2, 3, 4].map((capacity) => (
+                  <Pressable key={capacity} onPress={() => setNewRes({ ...newRes, capacity })} style={[s.typeChip, newRes.capacity === capacity && s.typeChipActive]}>
+                    <Text style={[s.typeText, newRes.capacity === capacity && s.typeTextActive]}>{capacity}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Pressable onPress={() => setNewRes({ ...newRes, identityRequested: !newRes.identityRequested })} style={s.identityToggle} testID="new-res-identity-toggle">
+                <Ionicons name={newRes.identityRequested ? "checkbox" : "square-outline"} size={22} color={newRes.identityRequested ? COLORS.brand : COLORS.onSurfaceTertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.identityText}>Kimlik doğrulamasını başlat</Text>
+                  <Text style={s.identityMeta}>Misafir, eş ve çocuklar için doğrulama kaydı açılır; başarılı olursa kod aktif olur.</Text>
+                </View>
+              </Pressable>
+              {newRes.identityRequested && (
+                <View style={s.identityBox}>
+                  <Text style={s.modalSub}>Doğrulanacak Kişiler</Text>
+                  <Text style={s.identityMeta}>Misafir: {newRes.name.trim() || "Ad Soyad alanı kullanılacak"}</Text>
+                  {newRes.capacity >= 2 && <TextInput placeholder="Eş adı soyadı" placeholderTextColor={COLORS.onSurfaceTertiary} value={newRes.memberNames[1]} onChangeText={(v) => setNewRes((r) => { const memberNames = [...r.memberNames]; memberNames[1] = v; return { ...r, memberNames }; })} style={s.input} />}
+                  {newRes.capacity >= 3 && <TextInput placeholder="Çocuk 1 adı soyadı" placeholderTextColor={COLORS.onSurfaceTertiary} value={newRes.memberNames[2]} onChangeText={(v) => setNewRes((r) => { const memberNames = [...r.memberNames]; memberNames[2] = v; return { ...r, memberNames }; })} style={s.input} />}
+                  {newRes.capacity >= 4 && <TextInput placeholder="Çocuk 2 adı soyadı" placeholderTextColor={COLORS.onSurfaceTertiary} value={newRes.memberNames[3]} onChangeText={(v) => setNewRes((r) => { const memberNames = [...r.memberNames]; memberNames[3] = v; return { ...r, memberNames }; })} style={s.input} />}
+                </View>
+              )}
+              {isValidISODate(newRes.checkIn) && isValidISODate(newRes.checkOut) && (nightsBetween(newRes.checkIn, newRes.checkOut) ?? 0) > 0 && (
+                <>
+                  <Text style={s.modalSub}>Uygun Oda Seçin</Text>
+                  {roomsLoading ? <ActivityIndicator color={COLORS.brand} /> : (
+                    <ScrollView style={{ maxHeight: 240 }}>
+                      <View style={s.roomsGrid}>
+                        {modalRooms.map((r) => (
+                          <Pressable
+                            key={r.id}
+                            testID={`new-res-room-${r.room_number}`}
+                            onPress={() => setNewRes({ ...newRes, room: r.room_number, roomId: r.id })}
+                            style={[s.pickRoom, newRes.roomId === r.id && s.pickRoomActive]}
+                          >
+                            <Text style={[s.pickRoomNum, newRes.roomId === r.id && { color: COLORS.onBrandPrimary }]}>{r.room_number}</Text>
+                            <Text style={[s.pickRoomType, newRes.roomId === r.id && { color: COLORS.onBrandPrimary }]}>{r.room_type}</Text>
+                            <Text style={[s.pickRoomType, newRes.roomId === r.id && { color: COLORS.onBrandPrimary }]}>₺{Math.round(r.price_per_night).toLocaleString("tr-TR")}</Text>
+                          </Pressable>
+                        ))}
+                        {!roomsLoading && modalRooms.length === 0 && <Text style={s.emptyText}>Uygun oda yok</Text>}
+                      </View>
+                    </ScrollView>
+                  )}
+                </>
+              )}
               <Pressable
                 testID="new-res-submit"
                 onPress={createReservation}
-                disabled={busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut)}
-                style={[s.modalBtn, (busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut)) && { opacity: 0.5 }]}
+                disabled={busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut) || !newRes.roomId}
+                style={[s.modalBtn, (busy === "create-res" || !newRes.name.trim() || !newRes.email.trim() || !newRes.phone.trim() || !isValidISODate(newRes.checkIn) || !isValidISODate(newRes.checkOut) || !newRes.roomId) && { opacity: 0.5 }]}
               >
                 {busy === "create-res" ? <ActivityIndicator color={COLORS.onBrandPrimary} /> : <Text style={s.modalBtnText}>Oluştur</Text>}
               </Pressable>
@@ -335,7 +470,7 @@ export default function AdminReservations() {
               <Text style={s.modalSub}>{assignRoom.res?.customer_name}</Text>
               <ScrollView style={{ maxHeight: 280 }}>
                 <View style={s.roomsGrid}>
-                  {availableRooms.map((r) => (
+                  {(assignRoom.open ? modalRooms : availableRooms).map((r) => (
                     <Pressable
                       key={r.id}
                       testID={`pick-room-${r.room_number}`}
@@ -364,6 +499,8 @@ const s = StyleSheet.create({
   header: { padding: SPACING.lg, paddingBottom: SPACING.sm },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   sub: { fontSize: 13, color: COLORS.onSurfaceTertiary, marginTop: 4 },
+  alertBanner: { flexDirection: "row", alignItems: "flex-start", gap: SPACING.sm, marginTop: SPACING.md, borderWidth: 1, borderColor: COLORS.warning, backgroundColor: "rgba(255,152,0,0.12)", borderRadius: RADIUS.md, padding: SPACING.sm },
+  alertText: { color: COLORS.onSurface, fontSize: 12, lineHeight: 18, flex: 1 },
   tabsRow: { flexDirection: "row", gap: SPACING.sm, marginTop: SPACING.md },
   tab: { paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm, borderRadius: RADIUS.pill, backgroundColor: COLORS.surfaceSecondary, borderWidth: 1, borderColor: COLORS.border, height: 36, justifyContent: "center" },
   tabActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
@@ -384,6 +521,15 @@ const s = StyleSheet.create({
   codeLbl: { color: COLORS.onSurfaceTertiary, fontSize: 11 },
   codeVal: { color: COLORS.brand, fontSize: 14, fontWeight: "800", letterSpacing: 2 },
   roomVal: { color: COLORS.onSurface, fontSize: 13, fontWeight: "700" },
+  identityCard: { borderWidth: 1, borderColor: COLORS.warning, backgroundColor: "rgba(255,152,0,0.10)", borderRadius: RADIUS.md, padding: SPACING.sm, gap: SPACING.xs },
+  identityCardDanger: { borderColor: COLORS.error, backgroundColor: "rgba(229,57,53,0.12)" },
+  identityCardOk: { borderColor: COLORS.success, backgroundColor: "rgba(76,175,80,0.12)" },
+  identityTop: { flexDirection: "row", alignItems: "center", gap: SPACING.xs },
+  identityToggle: { flexDirection: "row", alignItems: "flex-start", gap: SPACING.sm, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, padding: SPACING.md },
+  identityBox: { gap: SPACING.sm, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, padding: SPACING.md },
+  identityText: { color: COLORS.onSurface, fontSize: 12, fontWeight: "800" },
+  identityMeta: { color: COLORS.onSurfaceTertiary, fontSize: 11, lineHeight: 16 },
+  identityErr: { color: COLORS.error, fontSize: 11, fontWeight: "700" },
   actionsRow: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm, marginTop: SPACING.sm },
   actBtn: { paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, borderRadius: RADIUS.pill, flexDirection: "row", alignItems: "center", gap: SPACING.xs },
   actBtnPrimary: { backgroundColor: COLORS.brand },

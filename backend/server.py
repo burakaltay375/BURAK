@@ -16,19 +16,41 @@ import tempfile
 import re
 import string
 import secrets
+import base64
+import hashlib
+import io
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
 
 import bcrypt
 import jwt as pyjwt
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 
 from dotenv import load_dotenv
+
+try:
+    from PIL import Image, ImageStat
+except Exception:
+    Image = None
+    ImageStat = None
+
+try:
+    import cv2
+    import numpy as np
+except Exception:
+    cv2 = None
+    np = None
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -41,6 +63,7 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24 * 7
+IDENTITY_ENCRYPTION_KEY = os.environ.get("IDENTITY_ENCRYPTION_KEY", "")
 
 # --------------------------------------------------------------------------
 # DB
@@ -163,7 +186,30 @@ DEFAULT_HOTEL_ID = "default-hotel"
 Role = Literal["system_admin", "hotel_manager", "staff", "guest"]
 GuestType = Literal["standard", "vip", "casino"]
 PaymentStatus = Literal["pending", "paid", "casino_guest", "vip_guest", "company_paid"]
-RoomStatus = Literal["available", "occupied", "cleaning", "maintenance", "out_of_service"]
+RoomStatus = Literal["available", "reserved", "occupied", "cleaning", "maintenance"]
+RoomOperationalStatus = Literal["normal", "cleaning", "maintenance"]
+RoomType = Literal["Standard", "Deluxe", "Suite", "Family", "VIP"]
+ReservationIdentityStatus = Literal[
+    "not_required",
+    "waiting_for_verification",
+    "partially_verified",
+    "fully_verified",
+    "verification_failed",
+    "pending_review",
+    "verified_by_hotel",
+    "failed",
+]
+IdentitySubjectType = Literal["guest", "employee"]
+IdentityDocumentType = Literal["id_front", "id_back", "passport", "selfie", "other"]
+GuestVerificationStatus = Literal["unverified", "pending", "verified", "rejected", "expired"]
+EmployeeVerificationStatus = Literal["application_received", "identity_required", "in_review", "approved", "rejected", "active_employee"]
+VerificationStatus = Literal[
+    "unverified", "pending", "verified", "rejected", "expired",
+    "application_received", "identity_required", "in_review", "approved", "active_employee",
+    "not_started", "pending_review", "verified_by_hotel", "needs_review", "needs_new_documents", "suspicious",
+]
+FraudRisk = Literal["low", "medium", "high", "unknown"]
+AnalysisStatus = Literal["pending", "completed", "unavailable", "failed"]
 
 # --------------------------------------------------------------------------
 # Models
@@ -245,9 +291,14 @@ class ReservationCreateIn(BaseModel):
     customer_phone: str
     check_in_date: str   # YYYY-MM-DD (required)
     check_out_date: str  # YYYY-MM-DD (required)
+    capacity: Optional[int] = 1
+    room_id: Optional[str] = None
     room_number: Optional[str] = None  # may be assigned by admin later
     payment_status: PaymentStatus = "pending"
     guest_type: GuestType = "standard"
+    identity_verification_requested: bool = False
+    identity_members: List[Dict[str, Any]] = Field(default_factory=list)
+    identity_session_id: Optional[str] = None
 
 class AdminReservationIn(BaseModel):
     customer_name: str
@@ -255,16 +306,34 @@ class AdminReservationIn(BaseModel):
     customer_phone: str
     check_in_date: str
     check_out_date: str
+    capacity: Optional[int] = 1
+    room_id: Optional[str] = None
     room_number: Optional[str] = None
     status: ReservationStatus = "pending"
     payment_status: PaymentStatus = "pending"
     guest_type: GuestType = "standard"
+    identity_verification_requested: bool = False
+    identity_members: List[Dict[str, Any]] = Field(default_factory=list)
+    identity_session_id: Optional[str] = None
+
+class ReservationIdentityStartIn(BaseModel):
+    customer_name: str
+    customer_email: EmailStr
+    capacity: int = Field(1, ge=1, le=4)
+    identity_members: List[Dict[str, Any]] = Field(default_factory=list)
+
+class ReservationIdentityStartOut(BaseModel):
+    session_id: str
+    status: ReservationIdentityStatus = "waiting_for_verification"
+    identity_members: List[Dict[str, Any]]
 
 class AdminReservationUpdateIn(BaseModel):
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     check_in_date: Optional[str] = None
     check_out_date: Optional[str] = None
+    capacity: Optional[int] = None
+    room_id: Optional[str] = None
     room_number: Optional[str] = None
     status: Optional[ReservationStatus] = None
     payment_status: Optional[PaymentStatus] = None
@@ -280,7 +349,13 @@ class ReservationOut(BaseModel):
     customer_name: str
     customer_email: EmailStr
     customer_phone: str
+    capacity: Optional[int] = 1
+    room_id: Optional[str] = None
     room_number: Optional[str] = None
+    room_name: Optional[str] = None
+    price_per_night: Optional[float] = None
+    total_nights: Optional[int] = None
+    total_price: Optional[float] = None
     check_in_date: Optional[str] = None
     check_out_date: Optional[str] = None
     status: ReservationStatus
@@ -290,6 +365,11 @@ class ReservationOut(BaseModel):
     hotel_id: Optional[str] = None
     payment_status: PaymentStatus = "pending"
     guest_type: GuestType = "standard"
+    identity_verification_requested: bool = False
+    identity_status: ReservationIdentityStatus = "not_required"
+    identity_members: List[Dict[str, Any]] = Field(default_factory=list)
+    identity_failure_reason: Optional[str] = None
+    entry_code_expires_at: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -315,6 +395,107 @@ class HotelUpdateIn(BaseModel):
     address: Optional[str] = None
     active: Optional[bool] = None
     services: Optional[Dict[str, bool]] = None
+
+class HotelInfoKnowledge(BaseModel):
+    hotel_name: Optional[str] = None
+    description: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    star_rating: Optional[str] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+
+class HotelServicesKnowledge(BaseModel):
+    wifi: Optional[str] = None
+    parking: Optional[str] = None
+    swimming_pool: Optional[str] = None
+    spa: Optional[str] = None
+    sauna: Optional[str] = None
+    gym: Optional[str] = None
+    laundry: Optional[str] = None
+    airport_transfer: Optional[str] = None
+    room_service: Optional[str] = None
+    pet_policy: Optional[str] = None
+
+class RestaurantKnowledge(BaseModel):
+    breakfast_hours: Optional[str] = None
+    lunch_hours: Optional[str] = None
+    dinner_hours: Optional[str] = None
+    restaurant_menu: Optional[str] = None
+    room_service_hours: Optional[str] = None
+
+class RoomKnowledge(BaseModel):
+    room_types: Optional[str] = None
+    room_features: Optional[str] = None
+    balcony: Optional[str] = None
+    sea_view: Optional[str] = None
+    air_conditioning: Optional[str] = None
+    mini_bar: Optional[str] = None
+    safe: Optional[str] = None
+    tv: Optional[str] = None
+    coffee_machine: Optional[str] = None
+
+class PolicyKnowledge(BaseModel):
+    smoking_policy: Optional[str] = None
+    cancellation_policy: Optional[str] = None
+    child_policy: Optional[str] = None
+    early_check_in: Optional[str] = None
+    late_check_out: Optional[str] = None
+    pet_rules: Optional[str] = None
+
+class NearbyPlace(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    category: str = ""
+    description: str = ""
+    distance: str = ""
+
+class HotelEvent(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    time: str = ""
+    description: str = ""
+
+class PaidHotelService(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    is_paid: bool = False
+    price: str = ""
+    description: str = ""
+
+class GeneralHotelKnowledge(BaseModel):
+    all_information: Optional[str] = None
+
+class FaqItem(BaseModel):
+    id: Optional[str] = None
+    question: str = ""
+    answer: str = ""
+
+class CustomKnowledgeEntry(BaseModel):
+    id: Optional[str] = None
+    title: str = ""
+    content: str = ""
+
+class HotelAiKnowledgeUpdateIn(BaseModel):
+    hotel_info: HotelInfoKnowledge = Field(default_factory=HotelInfoKnowledge)
+    services: HotelServicesKnowledge = Field(default_factory=HotelServicesKnowledge)
+    restaurant: RestaurantKnowledge = Field(default_factory=RestaurantKnowledge)
+    rooms: RoomKnowledge = Field(default_factory=RoomKnowledge)
+    policies: PolicyKnowledge = Field(default_factory=PolicyKnowledge)
+    general_info: GeneralHotelKnowledge = Field(default_factory=GeneralHotelKnowledge)
+    events: List[HotelEvent] = Field(default_factory=list)
+    paid_services: List[PaidHotelService] = Field(default_factory=list)
+    nearby_places: List[NearbyPlace] = Field(default_factory=list)
+    faq: List[FaqItem] = Field(default_factory=list)
+    custom_entries: List[CustomKnowledgeEntry] = Field(default_factory=list)
+
+class HotelAiKnowledgeOut(HotelAiKnowledgeUpdateIn):
+    hotel_id: str
+    hotelId: str
+    updated_at: Optional[str] = None
+    updated_by: Optional[str] = None
 
 class ManagerCreateIn(BaseModel):
     hotel_id: str
@@ -344,6 +525,7 @@ class StaffCreateIn(BaseModel):
     nationality: str
     country: str
     region_city: str
+    start_identity_verification: bool = False
 
 class StaffUpdateIn(BaseModel):
     name: Optional[str] = None
@@ -384,21 +566,62 @@ class UserAdminOut(BaseModel):
     hotel_id: Optional[str] = None
     hotelId: Optional[str] = None
     guest_type: Optional[GuestType] = None
+    identity_status: Optional[str] = None
     active: bool = True
 
 class RoomIn(BaseModel):
     room_number: str
-    type: Optional[str] = "Standard"
+    room_name: Optional[str] = None
+    room_type: RoomType = "Standard"
+    type: Optional[str] = None
+    floor: Optional[str] = None
+    capacity: int = 2
+    price_per_night: float = 0
+    operational_status: RoomOperationalStatus = "normal"
+    is_active: bool = True
+    description: Optional[str] = None
+
+class RoomUpdateIn(BaseModel):
+    room_number: Optional[str] = None
+    room_name: Optional[str] = None
+    room_type: Optional[RoomType] = None
+    type: Optional[str] = None
+    floor: Optional[str] = None
+    capacity: Optional[int] = None
+    price_per_night: Optional[float] = None
+    operational_status: Optional[RoomOperationalStatus] = None
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
 
 class RoomOut(BaseModel):
     id: str
     room_number: str
+    room_name: Optional[str] = None
+    room_type: RoomType
     type: str
+    floor: Optional[str] = None
+    capacity: int
+    price_per_night: float
     status: RoomStatus
+    operational_status: RoomOperationalStatus = "normal"
+    is_active: bool = True
+    description: Optional[str] = None
+    current_guest_name: Optional[str] = None
+    active_reservation_id: Optional[str] = None
     created_at: str
+    updated_at: str
 
 class RoomStatusIn(BaseModel):
-    status: RoomStatus
+    status: RoomOperationalStatus
+
+class RoomPriceOut(BaseModel):
+    room_id: str
+    room_number: str
+    room_name: Optional[str] = None
+    room_type: RoomType
+    price_per_night: float
+    total_nights: int
+    total_price: float
 
 class AssignTaskIn(BaseModel):
     staff_id: str
@@ -407,6 +630,133 @@ class AnnouncementIn(BaseModel):
     title: str
     message: str
     active: bool = True
+
+class IdentityStartIn(BaseModel):
+    user_id: Optional[str] = None
+    subject_type: Optional[IdentitySubjectType] = None
+
+class IdentityProfileIn(BaseModel):
+    first_name: str
+    last_name: str
+    birth_date: str
+    nationality: str
+    document_type: str
+    document_number: str
+    document_expiry_date: Optional[str] = None
+    employee_role: Optional[str] = None
+    employment_start_date: Optional[str] = None
+    manager_approved: Optional[bool] = None
+    internal_notes: Optional[str] = None
+
+class IdentityDocumentUploadIn(BaseModel):
+    document_type: IdentityDocumentType
+    file_name: str
+    mime_type: str = "image/jpeg"
+    data_uri: str
+
+class SelfieUploadIn(BaseModel):
+    data_uri: str
+    file_name: str = "selfie.jpg"
+    mime_type: str = "image/jpeg"
+    completed_actions: List[str] = Field(default_factory=list)
+    challenge_id: Optional[str] = None
+
+class LivenessChallengeOut(BaseModel):
+    id: str
+    actions: List[str]
+    expires_at: str
+
+class IdentityDecisionIn(BaseModel):
+    note: Optional[str] = None
+
+class IdentityDocumentOut(BaseModel):
+    id: str
+    verification_id: str
+    document_type: IdentityDocumentType
+    file_name: str
+    mime_type: str
+    size: int
+    checksum: str
+    perceptual_hash: Optional[str] = None
+    quality: Dict[str, Any] = Field(default_factory=dict)
+    uploaded_by: str
+    created_at: str
+
+class OcrResultOut(BaseModel):
+    id: str
+    verification_id: str
+    status: AnalysisStatus
+    extracted: Dict[str, Any] = Field(default_factory=dict)
+    mismatches: List[str] = Field(default_factory=list)
+    confidence: float = 0
+    provider: str = "internal"
+    created_at: str
+
+class FaceResultOut(BaseModel):
+    id: str
+    verification_id: str
+    status: AnalysisStatus
+    face_present: bool = False
+    document_face_present: bool = False
+    similarity_score: float = 0
+    liveness_score: float = 0
+    completed_actions: List[str] = Field(default_factory=list)
+    provider: str = "internal"
+    created_at: str
+
+class FraudAnalysisOut(BaseModel):
+    id: str
+    verification_id: str
+    status: AnalysisStatus
+    fraud_risk: FraudRisk = "unknown"
+    confidence_score: int = 0
+    signals: List[str] = Field(default_factory=list)
+    duplicate_hits: List[str] = Field(default_factory=list)
+    recommended_status: VerificationStatus = "needs_review"
+    provider: str = "internal"
+    created_at: str
+
+class VerificationHistoryOut(BaseModel):
+    id: str
+    verification_id: str
+    from_status: Optional[str] = None
+    to_status: str
+    note: Optional[str] = None
+    actor_id: str
+    actor_role: str
+    created_at: str
+
+class IdentityVerificationOut(BaseModel):
+    id: str
+    user_id: str
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
+    hotel_id: str
+    hotelId: str
+    role: Role
+    subject_type: IdentitySubjectType
+    status: VerificationStatus
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    birth_date: Optional[str] = None
+    nationality: Optional[str] = None
+    document_type: Optional[str] = None
+    masked_document_number: Optional[str] = None
+    document_expiry_date: Optional[str] = None
+    employee_role: Optional[str] = None
+    employment_start_date: Optional[str] = None
+    manager_approved: Optional[bool] = None
+    internal_notes: Optional[str] = None
+    documents: List[IdentityDocumentOut] = Field(default_factory=list)
+    latest_ocr: Optional[OcrResultOut] = None
+    latest_face: Optional[FaceResultOut] = None
+    latest_fraud: Optional[FraudAnalysisOut] = None
+    confidence_score: Optional[int] = None
+    fraud_risk: Optional[FraudRisk] = None
+    created_by: str
+    updated_by: Optional[str] = None
+    created_at: str
+    updated_at: str
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -511,7 +861,7 @@ def public_user(u: dict) -> UserPublic:
         department=u.get("department"), room_no=u.get("room_no"),
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
-        hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
+        hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"), identity_status=u.get("identity_status"),
         active=u.get("active", True),
     )
 
@@ -523,6 +873,7 @@ def public_admin_user(u: dict) -> UserAdminOut:
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
         hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
+        identity_status=u.get("identity_status"),
         active=u.get("active", True),
     )
 
@@ -538,19 +889,253 @@ def public_request(r: dict) -> RequestOut:
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
+def normalize_reservation_identity_members(raw_members: Optional[List[Dict[str, Any]]], primary_name: str, capacity: int) -> list[dict]:
+    relation_labels = ["Adult 1", "Adult 2", "Child 1", "Child 2"]
+    members: list[dict] = []
+    seen = 0
+    for idx, item in enumerate(raw_members or []):
+        name = str((item or {}).get("name") or "").strip()
+        relation = str((item or {}).get("relation") or relation_labels[min(idx, len(relation_labels) - 1)]).strip()
+        if not name:
+            continue
+        members.append({
+            "id": str((item or {}).get("id") or uuid.uuid4()),
+            "name": name,
+            "relation": relation or "Misafir",
+            "status": str((item or {}).get("status") or "waiting_for_verification"),
+            "verification_id": (item or {}).get("verification_id"),
+        })
+        seen += 1
+        if seen >= max(1, min(4, capacity)):
+            break
+    if not members:
+        members.append({"id": str(uuid.uuid4()), "name": primary_name.strip(), "relation": "Adult 1", "status": "waiting_for_verification", "verification_id": None})
+    return members
+
+async def create_identity_alert(hotel_id: str, reservation_id: str, title: str, detail: str, severity: str = "warning") -> None:
+    await db.identity_alerts.insert_one({
+        "id": str(uuid.uuid4()),
+        "hotel_id": hotel_id,
+        "hotelId": hotel_id,
+        "reservation_id": reservation_id,
+        "title": title,
+        "detail": detail,
+        "severity": severity,
+        "read": False,
+        "created_at": now_iso(),
+    })
+
+def public_reservation_identity_status(raw_status: Optional[str], requested: bool) -> ReservationIdentityStatus:
+    if not requested:
+        return "not_required"
+    mapping = {
+        "pending_review": "waiting_for_verification",
+        "verified_by_hotel": "fully_verified",
+        "failed": "verification_failed",
+    }
+    return mapping.get(raw_status or "waiting_for_verification", raw_status or "waiting_for_verification")
+
+def verification_status_for_reservation(status_value: Optional[str]) -> str:
+    if status_value in {"verified_by_hotel", "verified", "approved", "active_employee"}:
+        return "verified"
+    if status_value in {"rejected", "suspicious"}:
+        return "failed"
+    if status_value == "needs_new_documents":
+        return "needs_new_documents"
+    return "pending_review"
+
+async def generate_entry_code_for_reservation(reservation: dict) -> dict:
+    code = await unique_access_code()
+    expires_base = reservation.get("check_out_date") or datetime.now(timezone.utc).date().isoformat()
+    try:
+        expires_at = (datetime.strptime(expires_base, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)).isoformat()
+    except Exception:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    return {
+        "access_code": code,
+        "encrypted_entry_code": encrypt_sensitive(code),
+        "entry_code_hash": identity_fingerprint(code),
+        "entry_code_expires_at": expires_at,
+    }
+
+async def create_reservation_identity_records(reservation: dict, actor_id: str = "system") -> list[dict]:
+    now = now_iso()
+    members = reservation.get("identity_members") or []
+    updated_members: list[dict] = []
+    for member in members:
+        verification_id = member.get("verification_id") or str(uuid.uuid4())
+        synthetic_user_id = f"reservation:{reservation['id']}:{member['id']}"
+        profile_name = (member.get("name") or "").strip()
+        first_name, _, last_name = profile_name.partition(" ")
+        verification = {
+            "id": verification_id,
+            "user_id": synthetic_user_id,
+            "reservation_id": reservation["id"],
+            "reservation_member_id": member["id"],
+            "hotel_id": reservation.get("hotel_id") or reservation.get("hotelId") or DEFAULT_HOTEL_ID,
+            "hotelId": reservation.get("hotelId") or reservation.get("hotel_id") or DEFAULT_HOTEL_ID,
+            "role": "guest",
+            "subject_type": "guest",
+            "status": "pending_review",
+            "profile": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "birth_date": None,
+                "nationality": None,
+                "document_type": None,
+                "relation": member.get("relation"),
+            },
+            "encrypted_profile": {},
+            "masked_document_number": None,
+            "created_by": actor_id,
+            "updated_by": actor_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.identity_verifications.update_one({"id": verification_id}, {"$setOnInsert": verification}, upsert=True)
+        await append_verification_history({**verification, "status": None}, {"id": actor_id, "role": "system"}, "pending_review", "Rezervasyon kişi doğrulaması başlatıldı")
+        updated_members.append({**member, "verification_id": verification_id, "status": "pending_review"})
+    await db.reservations.update_one({"id": reservation["id"]}, {"$set": {"identity_members": updated_members}})
+    return updated_members
+
+async def create_reservation_identity_session(body: ReservationIdentityStartIn, hotel_id: str = DEFAULT_HOTEL_ID, actor_id: str = "public") -> dict:
+    name = body.customer_name.strip()
+    if not name:
+        raise HTTPException(400, "Customer name is required before starting identity verification")
+    email = body.customer_email.lower().strip()
+    members = normalize_reservation_identity_members(body.identity_members, name, body.capacity)
+    if len(members) < body.capacity:
+        raise HTTPException(400, "Every guest must be listed before starting identity verification")
+    session_id = str(uuid.uuid4())
+    now = now_iso()
+    updated_members: list[dict] = []
+    for member in members:
+        verification_id = str(uuid.uuid4())
+        synthetic_user_id = f"reservation-session:{session_id}:{member['id']}"
+        profile_name = (member.get("name") or "").strip()
+        first_name, _, last_name = profile_name.partition(" ")
+        verification = {
+            "id": verification_id,
+            "user_id": synthetic_user_id,
+            "identity_session_id": session_id,
+            "reservation_id": None,
+            "reservation_member_id": member["id"],
+            "hotel_id": hotel_id,
+            "hotelId": hotel_id,
+            "role": "guest",
+            "subject_type": "guest",
+            "status": "pending_review",
+            "profile": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "birth_date": None,
+                "nationality": None,
+                "document_type": None,
+                "relation": member.get("relation"),
+                "reservation_email": email,
+            },
+            "encrypted_profile": {},
+            "masked_document_number": None,
+            "created_by": actor_id,
+            "updated_by": actor_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.identity_verifications.insert_one(verification.copy())
+        await append_verification_history({**verification, "status": None}, {"id": actor_id, "role": "system"}, "pending_review", "Reservation identity workflow started")
+        updated_members.append({**member, "verification_id": verification_id, "status": "pending_review"})
+    logger.info("Reservation identity workflow started: session=%s email=%s members=%s", session_id, email, len(updated_members))
+    return {"session_id": session_id, "status": "waiting_for_verification", "identity_members": updated_members}
+
+async def attach_identity_session_to_reservation(session_id: str, reservation: dict) -> list[dict]:
+    verifications = await db.identity_verifications.find({"identity_session_id": session_id}, {"_id": 0}).to_list(100)
+    if not verifications:
+        raise HTTPException(400, "Identity verification session was not found")
+    members = []
+    by_member = {v.get("reservation_member_id"): v for v in verifications}
+    for member in reservation.get("identity_members") or []:
+        verification = by_member.get(member.get("id"))
+        if verification:
+            members.append({**member, "verification_id": verification["id"], "status": verification_status_for_reservation(verification.get("status"))})
+    if not members:
+        members = [
+            {
+                "id": v.get("reservation_member_id") or str(uuid.uuid4()),
+                "name": " ".join([v.get("profile", {}).get("first_name") or "", v.get("profile", {}).get("last_name") or ""]).strip() or "Guest",
+                "relation": v.get("profile", {}).get("relation") or "Guest",
+                "verification_id": v["id"],
+                "status": verification_status_for_reservation(v.get("status")),
+            }
+            for v in verifications
+        ]
+    await db.identity_verifications.update_many(
+        {"identity_session_id": session_id},
+        {"$set": {"reservation_id": reservation["id"], "hotel_id": reservation.get("hotel_id"), "hotelId": reservation.get("hotelId"), "updated_at": now_iso()}},
+    )
+    await db.reservations.update_one({"id": reservation["id"]}, {"$set": {"identity_members": members}})
+    return members
+
+async def sync_reservation_identity_status(reservation_id: str) -> Optional[dict]:
+    reservation = await db.reservations.find_one({"id": reservation_id}, {"_id": 0})
+    if not reservation or not reservation.get("identity_verification_requested"):
+        return reservation
+    verifications = await db.identity_verifications.find({"reservation_id": reservation_id}, {"_id": 0}).to_list(100)
+    members = reservation.get("identity_members") or []
+    by_member = {v.get("reservation_member_id"): v for v in verifications}
+    verified_count = 0
+    failed = False
+    synced_members = []
+    for member in members:
+        verification = by_member.get(member.get("id"))
+        member_status = verification_status_for_reservation((verification or {}).get("status"))
+        if member_status == "verified":
+            verified_count += 1
+        if member_status == "failed":
+            failed = True
+        synced_members.append({**member, "status": member_status, "verification_id": (verification or {}).get("id") or member.get("verification_id")})
+    if failed:
+        next_status = "verification_failed"
+    elif synced_members and verified_count == len(synced_members):
+        next_status = "fully_verified"
+    elif verified_count > 0:
+        next_status = "partially_verified"
+    else:
+        next_status = "waiting_for_verification"
+    update: dict = {"identity_status": next_status, "identity_members": synced_members, "updated_at": now_iso()}
+    if next_status == "fully_verified" and not reservation.get("entry_code_hash"):
+        update.update(await generate_entry_code_for_reservation(reservation))
+    if next_status == "verification_failed":
+        update["access_code"] = ""
+    await db.reservations.update_one({"id": reservation_id}, {"$set": update})
+    return await db.reservations.find_one({"id": reservation_id}, {"_id": 0})
+
 def public_reservation(r: dict) -> "ReservationOut":
+    identity_requested = bool(r.get("identity_verification_requested"))
+    identity_status = public_reservation_identity_status(r.get("identity_status"), identity_requested)
+    code_visible = not identity_requested or identity_status == "fully_verified"
     return ReservationOut(
         id=r["id"], customer_name=r["customer_name"],
         customer_email=r["customer_email"], customer_phone=r["customer_phone"],
+        capacity=r.get("capacity") or 1,
+        room_id=r.get("room_id"),
         room_number=r.get("room_number"),
+        room_name=r.get("room_name"),
+        price_per_night=r.get("price_per_night"),
+        total_nights=r.get("total_nights"),
+        total_price=r.get("total_price"),
         check_in_date=r.get("check_in_date"),
         check_out_date=r.get("check_out_date"),
         status=r["status"],
-        access_code=r["access_code"], user_id=r.get("user_id"),
+        access_code=r["access_code"] if code_visible else "KIMLIK-DOGRULAMA-BEKLIYOR", user_id=r.get("user_id"),
         email_sent=bool(r.get("email_sent")),
         hotel_id=r.get("hotelId") or r.get("hotel_id"),
         payment_status=r.get("payment_status") or "pending",
         guest_type=r.get("guest_type") or "standard",
+        identity_verification_requested=identity_requested,
+        identity_status=identity_status,
+        identity_members=r.get("identity_members") or [],
+        identity_failure_reason=r.get("identity_failure_reason"),
+        entry_code_expires_at=r.get("entry_code_expires_at"),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -562,6 +1147,406 @@ def public_hotel(h: dict) -> "HotelOut":
         created_at=h["created_at"],
     )
 
+def _identity_key() -> bytes:
+    key = (IDENTITY_ENCRYPTION_KEY or "").strip()
+    if not key:
+        logger.warning("IDENTITY_ENCRYPTION_KEY yok; dev fallback kullanılıyor. Production için güçlü ayrı anahtar ayarlayın.")
+        key = JWT_SECRET + ":identity"
+    return hashlib.sha256(key.encode()).digest()
+
+def _identity_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    chunks: list[bytes] = []
+    counter = 0
+    while sum(len(c) for c in chunks) < length:
+        chunks.append(hashlib.sha256(key + nonce + counter.to_bytes(4, "big")).digest())
+        counter += 1
+    return b"".join(chunks)[:length]
+
+def identity_encrypt_bytes(data: bytes) -> str:
+    key = _identity_key()
+    nonce = secrets.token_bytes(16)
+    stream = _identity_keystream(key, nonce, len(data))
+    cipher = bytes(a ^ b for a, b in zip(data, stream))
+    mac = hashlib.sha256(key + nonce + cipher).digest()
+    return base64.urlsafe_b64encode(nonce + mac + cipher).decode()
+
+def identity_decrypt_bytes(token: str) -> bytes:
+    try:
+        raw = base64.urlsafe_b64decode(token.encode())
+    except Exception as exc:
+        raise ValueError("invalid encrypted payload") from exc
+    if len(raw) < 48:
+        raise ValueError("invalid encrypted payload")
+    nonce, mac, cipher = raw[:16], raw[16:48], raw[48:]
+    key = _identity_key()
+    expected = hashlib.sha256(key + nonce + cipher).digest()
+    if not secrets.compare_digest(mac, expected):
+        raise ValueError("encrypted payload integrity check failed")
+    stream = _identity_keystream(key, nonce, len(cipher))
+    return bytes(a ^ b for a, b in zip(cipher, stream))
+
+def encrypt_sensitive(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    return identity_encrypt_bytes(text.encode())
+
+def decrypt_sensitive(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return identity_decrypt_bytes(value).decode()
+    except ValueError:
+        return None
+
+def mask_identity_number(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{'*' * max(0, len(text) - 4)}{text[-4:]}"
+
+def identity_initial_status(subject_type: IdentitySubjectType) -> VerificationStatus:
+    return "not_started"
+
+def identity_submitted_status(subject_type: IdentitySubjectType) -> VerificationStatus:
+    return "pending_review"
+
+def normalize_identity_status(status_value: Optional[str]) -> VerificationStatus:
+    mapping = {
+        "unverified": "not_started",
+        "pending": "pending_review",
+        "verified": "verified_by_hotel",
+        "approved": "verified_by_hotel",
+        "in_review": "pending_review",
+        "identity_required": "needs_new_documents",
+        "application_received": "not_started",
+    }
+    value = status_value or "not_started"
+    return mapping.get(value, value)
+
+def user_subject_type(user: dict) -> IdentitySubjectType:
+    return "employee" if role_of(user) == "staff" else "guest"
+
+async def audit_identity(actor: dict, action: str, verification_id: Optional[str], target_user_id: Optional[str], hotel_id: Optional[str], detail: Optional[dict] = None) -> None:
+    safe_detail = {k: v for k, v in (detail or {}).items() if k not in {"document_number", "data_uri", "encrypted_data", "encrypted_profile"}}
+    await db.audit_logs.insert_one({
+        "id": str(uuid.uuid4()),
+        "action": action,
+        "verification_id": verification_id,
+        "target_user_id": target_user_id,
+        "hotel_id": hotel_id,
+        "hotelId": hotel_id,
+        "actor_id": actor.get("id"),
+        "actor_role": role_of(actor),
+        "detail": safe_detail,
+        "created_at": now_iso(),
+    })
+
+async def append_verification_history(verification: dict, actor: dict, to_status: str, note: Optional[str] = None) -> None:
+    await db.verification_history.insert_one({
+        "id": str(uuid.uuid4()),
+        "verification_id": verification["id"],
+        "from_status": verification.get("status"),
+        "to_status": to_status,
+        "note": (note or "").strip() or None,
+        "actor_id": actor["id"],
+        "actor_role": role_of(actor),
+        "created_at": now_iso(),
+    })
+
+async def get_identity_target_user(actor: dict, body: IdentityStartIn) -> dict:
+    role = role_of(actor)
+    target_id = body.user_id or actor["id"]
+    if role in ("guest", "staff"):
+        if target_id != actor["id"]:
+            raise HTTPException(403, "Yalnızca kendi kimlik doğrulamanızı yönetebilirsiniz")
+        return actor
+    target = await db.users.find_one({"id": target_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "Kullanıcı bulunamadı")
+    if role == "hotel_manager" and (target.get("hotelId") or target.get("hotel_id")) != user_hotel_id(actor):
+        raise HTTPException(403, "Bu kullanıcı otelinize ait değil")
+    if role == "hotel_manager" and role_of(target) not in ("guest", "staff"):
+        raise HTTPException(403, "Yalnızca misafir veya çalışan doğrulaması başlatabilirsiniz")
+    require_roles(actor, "hotel_manager", "system_admin")
+    return target
+
+async def load_verification(verification_id: str) -> dict:
+    doc = await db.identity_verifications.find_one({"id": verification_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Kimlik doğrulama kaydı bulunamadı")
+    return doc
+
+def can_access_verification(actor: dict, verification: dict, write: bool = False) -> bool:
+    role = role_of(actor)
+    if role == "system_admin":
+        return True
+    if verification.get("user_id") == actor.get("id") and role in ("guest", "staff") and not write:
+        return True
+    if verification.get("user_id") == actor.get("id") and role in ("guest", "staff") and write:
+        return verification.get("status") not in ("verified", "approved", "verified_by_hotel", "active_employee")
+    if role == "hotel_manager":
+        return verification.get("hotel_id") == user_hotel_id(actor) or verification.get("hotelId") == user_hotel_id(actor)
+    return False
+
+async def documents_for_verification(verification_id: str) -> List[IdentityDocumentOut]:
+    docs = await db.identity_documents.find({"verification_id": verification_id}, {"_id": 0, "encrypted_data": 0}).sort("created_at", -1).to_list(50)
+    return [IdentityDocumentOut(**d) for d in docs]
+
+async def latest_analysis(collection: str, verification_id: str) -> Optional[dict]:
+    return await db[collection].find_one({"verification_id": verification_id}, {"_id": 0}, sort=[("created_at", -1)])
+
+def identity_fingerprint(value: Optional[str]) -> Optional[str]:
+    text = re.sub(r"\s+", "", (value or "").upper())
+    if not text:
+        return None
+    return hashlib.sha256(_identity_key() + text.encode()).hexdigest()
+
+def average_hash(data: bytes) -> Optional[str]:
+    if Image is None:
+        return None
+    try:
+        image = Image.open(io.BytesIO(data)).convert("L").resize((8, 8))
+        pixels = list(image.getdata())
+        avg = sum(pixels) / len(pixels)
+        bits = "".join("1" if p > avg else "0" for p in pixels)
+        return f"{int(bits, 2):016x}"
+    except Exception:
+        return None
+
+def hamming_hex(a: Optional[str], b: Optional[str]) -> int:
+    if not a or not b:
+        return 999
+    return bin(int(a, 16) ^ int(b, 16)).count("1")
+
+def analyze_image_quality(data: bytes, mime_type: str) -> Dict[str, Any]:
+    result = {
+        "status": "unavailable",
+        "width": None,
+        "height": None,
+        "blur_score": None,
+        "is_blurry": False,
+        "is_low_resolution": False,
+        "crop_risk": False,
+        "format_supported": mime_type in {"image/jpeg", "image/jpg", "image/png", "application/pdf"},
+        "notes": [],
+    }
+    if mime_type == "application/pdf":
+        result.update({"status": "completed", "notes": ["PDF metadata only; image quality analysis unavailable"]})
+        return result
+    if Image is None:
+        result["notes"].append("Pillow unavailable")
+        return result
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        width, height = image.size
+        result["width"], result["height"] = width, height
+        result["is_low_resolution"] = width < 600 or height < 400
+        if result["is_low_resolution"]:
+            result["notes"].append("low_resolution")
+        if cv2 is not None and np is not None:
+            gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            result["blur_score"] = blur_score
+            result["is_blurry"] = blur_score < 80
+            if result["is_blurry"]:
+                result["notes"].append("blurry")
+            edges = cv2.Canny(gray, 80, 160)
+            border = max(3, min(width, height) // 80)
+            border_edges = int(edges[:border, :].sum() + edges[-border:, :].sum() + edges[:, :border].sum() + edges[:, -border:].sum())
+            result["crop_risk"] = border_edges > 50000
+            if result["crop_risk"]:
+                result["notes"].append("crop_risk")
+        result["status"] = "completed"
+    except Exception as exc:
+        result["status"] = "failed"
+        result["notes"].append(str(exc))
+    return result
+
+def detect_face_present(data: bytes, mime_type: str) -> bool:
+    if cv2 is None or np is None or not mime_type.startswith("image/"):
+        return False
+    try:
+        arr = np.frombuffer(data, dtype=np.uint8)
+        image = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return False
+        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = cascade.detectMultiScale(image, 1.1, 4)
+        return len(faces) > 0
+    except Exception:
+        return False
+
+def normalize_text_for_match(value: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+def compare_ocr_to_profile(extracted: dict, profile: dict, masked_document_number: Optional[str]) -> tuple[list[str], float]:
+    checks = {
+        "first_name": profile.get("first_name"),
+        "last_name": profile.get("last_name"),
+        "birth_date": profile.get("birth_date"),
+        "document_number": masked_document_number,
+    }
+    mismatches: list[str] = []
+    compared = 0
+    matched = 0
+    for key, expected in checks.items():
+        got = extracted.get(key)
+        if not got or not expected:
+            continue
+        compared += 1
+        if key == "document_number":
+            ok = str(got).endswith(str(expected)[-4:])
+        else:
+            ok = normalize_text_for_match(got) == normalize_text_for_match(expected)
+        if ok:
+            matched += 1
+        else:
+            mismatches.append(key)
+    if compared == 0:
+        return mismatches, 0
+    return mismatches, round((matched / compared) * 100, 2)
+
+async def duplicate_signals(verification: dict, document_number_fingerprint: Optional[str] = None, checksum: Optional[str] = None, perceptual_hash: Optional[str] = None) -> list[str]:
+    signals: list[str] = []
+    user_id = verification.get("user_id")
+    if document_number_fingerprint:
+        existing = await db.identity_verifications.find_one({"document_fingerprint": document_number_fingerprint, "user_id": {"$ne": user_id}}, {"_id": 0})
+        if existing:
+            signals.append("duplicate_identity_number")
+    if checksum:
+        existing_doc = await db.identity_documents.find_one({"checksum": checksum, "verification_id": {"$ne": verification.get("id")}}, {"_id": 0})
+        if existing_doc:
+            signals.append("duplicate_document_checksum")
+    if perceptual_hash:
+        docs = await db.identity_documents.find({"perceptual_hash": {"$ne": None}, "verification_id": {"$ne": verification.get("id")}}, {"_id": 0}).to_list(200)
+        if any(hamming_hex(perceptual_hash, d.get("perceptual_hash")) <= 4 for d in docs):
+            signals.append("similar_document_image")
+    return signals
+
+class VerificationProvider:
+    name = "base"
+
+    async def analyze_document(self, data: bytes, mime_type: str) -> dict:
+        raise NotImplementedError
+
+    async def run_ocr(self, data: bytes, mime_type: str, profile: dict, masked_document_number: Optional[str]) -> dict:
+        raise NotImplementedError
+
+    async def run_face_comparison(self, selfie: dict, document: Optional[dict], completed_actions: list[str]) -> dict:
+        raise NotImplementedError
+
+class InternalHeuristicProvider(VerificationProvider):
+    name = "internal"
+
+    async def analyze_document(self, data: bytes, mime_type: str) -> dict:
+        return analyze_image_quality(data, mime_type)
+
+    async def run_ocr(self, data: bytes, mime_type: str, profile: dict, masked_document_number: Optional[str]) -> dict:
+        if pytesseract is None or Image is None or not mime_type.startswith("image/"):
+            return {"status": "unavailable", "extracted": {}, "mismatches": ["ocr_unavailable"], "confidence": 0}
+        try:
+            image = Image.open(io.BytesIO(data))
+            text = pytesseract.image_to_string(image, lang="tur+eng")
+            extracted = {
+                "raw_text": text[:2000],
+                "first_name": profile.get("first_name") if profile.get("first_name", "").lower() in text.lower() else None,
+                "last_name": profile.get("last_name") if profile.get("last_name", "").lower() in text.lower() else None,
+                "birth_date": profile.get("birth_date") if profile.get("birth_date") in text else None,
+                "document_number": masked_document_number if masked_document_number and masked_document_number[-4:] in text else None,
+            }
+            mismatches, confidence = compare_ocr_to_profile(extracted, profile, masked_document_number)
+            return {"status": "completed", "extracted": extracted, "mismatches": mismatches, "confidence": confidence}
+        except Exception as exc:
+            return {"status": "failed", "extracted": {}, "mismatches": [str(exc)], "confidence": 0}
+
+    async def run_face_comparison(self, selfie: dict, document: Optional[dict], completed_actions: list[str]) -> dict:
+        selfie_data = identity_decrypt_bytes(selfie["encrypted_data"])
+        selfie_face = detect_face_present(selfie_data, selfie.get("mime_type") or "image/jpeg")
+        doc_face = False
+        if document:
+            doc_data = identity_decrypt_bytes(document["encrypted_data"])
+            doc_face = detect_face_present(doc_data, document.get("mime_type") or "image/jpeg")
+        action_score = min(100, int((len(set(completed_actions)) / 3) * 100))
+        similarity = 70 if selfie_face and doc_face else 35 if selfie_face else 0
+        return {
+            "status": "completed",
+            "face_present": selfie_face,
+            "document_face_present": doc_face,
+            "similarity_score": similarity,
+            "liveness_score": action_score,
+            "completed_actions": completed_actions,
+        }
+
+class ProviderRegistry:
+    _providers: Dict[str, VerificationProvider] = {"internal": InternalHeuristicProvider()}
+
+    @classmethod
+    def get(cls, name: str = "internal") -> VerificationProvider:
+        return cls._providers.get(name) or cls._providers["internal"]
+
+identity_provider = ProviderRegistry.get("internal")
+
+async def public_identity_verification(v: dict) -> IdentityVerificationOut:
+    user = await db.users.find_one({"id": v["user_id"]}, {"_id": 0})
+    profile = v.get("profile") or {}
+    latest_ocr = await latest_analysis("identity_ocr_results", v["id"])
+    latest_face = await latest_analysis("identity_face_results", v["id"])
+    latest_fraud = await latest_analysis("identity_fraud_analysis", v["id"])
+    return IdentityVerificationOut(
+        id=v["id"],
+        user_id=v["user_id"],
+        user_name=(user or {}).get("name"),
+        user_email=(user or {}).get("email"),
+        hotel_id=v.get("hotel_id") or v.get("hotelId") or DEFAULT_HOTEL_ID,
+        hotelId=v.get("hotelId") or v.get("hotel_id") or DEFAULT_HOTEL_ID,
+        role=v.get("role") or "guest",
+        subject_type=v.get("subject_type") or "guest",
+        status=normalize_identity_status(v.get("status")),
+        first_name=profile.get("first_name"),
+        last_name=profile.get("last_name"),
+        birth_date=profile.get("birth_date"),
+        nationality=profile.get("nationality"),
+        document_type=profile.get("document_type"),
+        masked_document_number=v.get("masked_document_number"),
+        document_expiry_date=profile.get("document_expiry_date"),
+        employee_role=profile.get("employee_role"),
+        employment_start_date=profile.get("employment_start_date"),
+        manager_approved=profile.get("manager_approved"),
+        internal_notes=profile.get("internal_notes"),
+        documents=await documents_for_verification(v["id"]),
+        latest_ocr=OcrResultOut(**latest_ocr) if latest_ocr else None,
+        latest_face=FaceResultOut(**latest_face) if latest_face else None,
+        latest_fraud=FraudAnalysisOut(**latest_fraud) if latest_fraud else None,
+        confidence_score=latest_fraud.get("confidence_score") if latest_fraud else None,
+        fraud_risk=latest_fraud.get("fraud_risk") if latest_fraud else None,
+        created_by=v.get("created_by") or v["user_id"],
+        updated_by=v.get("updated_by"),
+        created_at=v.get("created_at") or now_iso(),
+        updated_at=v.get("updated_at") or v.get("created_at") or now_iso(),
+    )
+
+def parse_data_uri(data_uri: str) -> tuple[str, bytes]:
+    raw = (data_uri or "").strip()
+    if not raw:
+        raise HTTPException(400, "Belge içeriği gerekli")
+    if raw.startswith("data:"):
+        header, _, payload = raw.partition(",")
+        mime = header.split(";")[0].replace("data:", "") or "application/octet-stream"
+    else:
+        mime, payload = "application/octet-stream", raw
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except Exception:
+        raise HTTPException(400, "Belge base64 formatı geçersiz")
+    if not data:
+        raise HTTPException(400, "Belge boş olamaz")
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(400, "Belge çok büyük (maks 8MB)")
+    return mime, data
+
 async def ensure_active_hotel_or_none(hotel_id: Optional[str]) -> Optional[dict]:
     hid = (hotel_id or "").strip()
     if not hid:
@@ -570,12 +1555,6 @@ async def ensure_active_hotel_or_none(hotel_id: Optional[str]) -> Optional[dict]
     if not h:
         raise HTTPException(403, "Seçilen otel aktif değil veya bulunamadı")
     return h
-
-def public_room(r: dict) -> "RoomOut":
-    return RoomOut(
-        id=r["id"], room_number=r["room_number"], type=r.get("type") or "Standard",
-        status=r.get("status") or "available", created_at=r["created_at"],
-    )
 
 def gen_access_code(length: int = 6) -> str:
     alphabet = string.ascii_uppercase + string.digits
@@ -613,6 +1592,257 @@ def validate_services(raw: Dict[str, bool]) -> Dict[str, bool]:
     current.update({key: bool(value) for key, value in raw.items()})
     return current
 
+def _clean_string(value: Any) -> str:
+    return str(value or "").strip()
+
+def _clean_dict(raw: Optional[dict], model: type[BaseModel]) -> dict:
+    allowed = set(model.model_fields.keys())
+    raw = raw if isinstance(raw, dict) else {}
+    return {key: _clean_string(raw.get(key)) for key in allowed}
+
+def _with_entry_ids(entries: list[dict]) -> list[dict]:
+    clean: list[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        doc = {k: (bool(v) if k == "is_paid" else _clean_string(v)) for k, v in entry.items() if k != "id"}
+        if not any(doc.values()):
+            continue
+        clean.append({"id": _clean_string(entry.get("id")) or str(uuid.uuid4()), **doc})
+    return clean
+
+def _distance_sort_key(place: dict) -> float:
+    raw = _clean_string(place.get("distance")).lower().replace(",", ".")
+    match = re.search(r"(\d+(?:\.\d+)?)", raw)
+    if not match:
+        return 999999.0
+    value = float(match.group(1))
+    if "km" in raw:
+        return value * 1000
+    return value
+
+def default_ai_knowledge(hotel_id: str) -> dict:
+    return {
+        "hotel_id": hotel_id,
+        "hotelId": hotel_id,
+        "hotel_info": HotelInfoKnowledge().model_dump(),
+        "services": HotelServicesKnowledge().model_dump(),
+        "restaurant": RestaurantKnowledge().model_dump(),
+        "rooms": RoomKnowledge().model_dump(),
+        "policies": PolicyKnowledge().model_dump(),
+        "general_info": GeneralHotelKnowledge().model_dump(),
+        "events": [],
+        "paid_services": [],
+        "nearby_places": [],
+        "faq": [],
+        "custom_entries": [],
+        "updated_at": None,
+        "updated_by": None,
+    }
+
+def normalize_ai_knowledge_payload(raw: dict, hotel_id: str, updated_by: Optional[str] = None) -> dict:
+    doc = default_ai_knowledge(hotel_id)
+    doc["hotel_info"] = _clean_dict(raw.get("hotel_info"), HotelInfoKnowledge)
+    doc["services"] = _clean_dict(raw.get("services"), HotelServicesKnowledge)
+    doc["restaurant"] = _clean_dict(raw.get("restaurant"), RestaurantKnowledge)
+    doc["rooms"] = _clean_dict(raw.get("rooms"), RoomKnowledge)
+    doc["policies"] = _clean_dict(raw.get("policies"), PolicyKnowledge)
+    doc["general_info"] = _clean_dict(raw.get("general_info"), GeneralHotelKnowledge)
+    doc["events"] = _with_entry_ids(raw.get("events") if isinstance(raw.get("events"), list) else [])
+    doc["paid_services"] = _with_entry_ids(raw.get("paid_services") if isinstance(raw.get("paid_services"), list) else [])
+    nearby_places = _with_entry_ids(raw.get("nearby_places") if isinstance(raw.get("nearby_places"), list) else [])
+    doc["nearby_places"] = sorted(nearby_places, key=_distance_sort_key)
+    doc["faq"] = _with_entry_ids(raw.get("faq") if isinstance(raw.get("faq"), list) else [])
+    doc["custom_entries"] = _with_entry_ids(raw.get("custom_entries") if isinstance(raw.get("custom_entries"), list) else [])
+    doc["updated_at"] = raw.get("updated_at") or now_iso()
+    doc["updated_by"] = updated_by or raw.get("updated_by")
+    return doc
+
+async def get_ai_knowledge_doc(hotel_id: str) -> dict:
+    doc = await db.hotel_ai_knowledge.find_one({"hotel_id": hotel_id}, {"_id": 0})
+    if not doc:
+        doc = await db.hotel_ai_knowledge.find_one({"hotelId": hotel_id}, {"_id": 0})
+    return normalize_ai_knowledge_payload(doc or {}, hotel_id)
+
+def public_ai_knowledge(doc: dict) -> HotelAiKnowledgeOut:
+    hotel_id = doc.get("hotelId") or doc.get("hotel_id") or DEFAULT_HOTEL_ID
+    normalized = normalize_ai_knowledge_payload(doc, hotel_id)
+    return HotelAiKnowledgeOut(**normalized)
+
+def _append_section_lines(lines: list[str], title: str, data: dict, labels: Optional[dict[str, str]] = None) -> None:
+    values = []
+    for key, value in (data or {}).items():
+        text = _clean_string(value)
+        if text:
+            values.append(f"- {(labels or {}).get(key, key.replace('_', ' ').title())}: {text}")
+    if values:
+        lines.append(f"\n{title}:")
+        lines.extend(values)
+
+def ai_knowledge_to_text(doc: dict) -> str:
+    lines: list[str] = []
+    _append_section_lines(lines, "ALL HOTEL INFORMATION", doc.get("general_info") or {"all_information": ""}, {"all_information": "All Information"})
+    events = doc.get("events") or []
+    if events:
+        lines.append("\nHOTEL EVENTS AND HOURS:")
+        for event in events:
+            bits = [event.get("name"), event.get("time"), event.get("description")]
+            text = " - ".join([_clean_string(b) for b in bits if _clean_string(b)])
+            if text:
+                lines.append(f"- {text}")
+    paid_services = doc.get("paid_services") or []
+    if paid_services:
+        lines.append("\nHOTEL SERVICES, FEES AND PRICES:")
+        for service in paid_services:
+            paid_label = "Paid" if service.get("is_paid") else "Free"
+            bits = [service.get("name"), paid_label, service.get("price"), service.get("description")]
+            text = " - ".join([_clean_string(b) for b in bits if _clean_string(b)])
+            if text:
+                lines.append(f"- {text}")
+    nearby = doc.get("nearby_places") or []
+    if nearby:
+        lines.append("\nNEARBY PLACES SORTED FROM NEAREST TO FARTHEST:")
+        for place in nearby:
+            bits = [place.get("name"), place.get("category"), place.get("distance"), place.get("description")]
+            text = " - ".join([_clean_string(b) for b in bits if _clean_string(b)])
+            if text:
+                lines.append(f"- {text}")
+    # Keep legacy fields readable for existing saved documents, but new UI writes the sections above.
+    _append_section_lines(lines, "LEGACY HOTEL INFORMATION", doc.get("hotel_info") or {})
+    _append_section_lines(lines, "LEGACY HOTEL SERVICES", doc.get("services") or {})
+    _append_section_lines(lines, "LEGACY RESTAURANT INFORMATION", doc.get("restaurant") or {})
+    _append_section_lines(lines, "LEGACY ROOM INFORMATION", doc.get("rooms") or {})
+    _append_section_lines(lines, "LEGACY HOTEL POLICIES", doc.get("policies") or {})
+    faq = doc.get("faq") or []
+    if faq:
+        lines.append("\nFAQ:")
+        for item in faq:
+            q = _clean_string(item.get("question"))
+            a = _clean_string(item.get("answer"))
+            if q and a:
+                lines.append(f"- Q: {q}\n  A: {a}")
+    custom = doc.get("custom_entries") or []
+    if custom:
+        lines.append("\nCUSTOM INFORMATION:")
+        for item in custom:
+            title = _clean_string(item.get("title"))
+            content = _clean_string(item.get("content"))
+            if title or content:
+                lines.append(f"- {title}: {content}" if title else f"- {content}")
+    return "\n".join(lines).strip()
+
+def ai_knowledge_has_content(doc: dict) -> bool:
+    return bool(ai_knowledge_to_text(doc))
+
+def missing_knowledge_reply() -> str:
+    return "Bu bilgiyi otelin AI bilgi tabanında bulamadım. Lütfen yardım için resepsiyonla iletişime geçin."
+
+def is_hotel_info_question(text: str) -> bool:
+    lowered = text.lower()
+    keywords = [
+        "etkinlik", "aktivite", "event", "saat", "program",
+        "ücret", "ucret", "fiyat", "kaç para", "kac para", "paid", "free", "ücretsiz", "ucretsiz",
+        "kahvalt", "breakfast", "öğle", "ogle", "lunch", "akşam yeme", "dinner", "menü", "menu",
+        "havuz", "pool", "spa", "sauna", "gym", "fitness", "otopark", "parking", "wifi", "wi-fi",
+        "evcil", "pet", "sigara", "smoking", "iptal", "cancellation", "çocuk", "child",
+        "check-in", "check in", "giriş", "giris", "check-out", "check out", "çıkış", "cikis",
+        "adres", "address", "telefon", "phone", "email", "website", "yakın", "nearby",
+        "eczane", "pharmacy", "plaj", "beach", "airport", "havaliman", "hospital", "hastane",
+        "oda tipi", "room type", "balkon", "sea view", "deniz", "mini bar", "kasa", "tv",
+    ]
+    return any(keyword in lowered for keyword in keywords)
+
+def knowledge_answer(message: str, knowledge_doc: Optional[dict]) -> Optional[str]:
+    if not knowledge_doc or not ai_knowledge_has_content(knowledge_doc):
+        return missing_knowledge_reply() if is_hotel_info_question(message) else None
+    lowered = message.lower()
+    if any(k in lowered for k in ["etkinlik", "aktivite", "event", "program"]):
+        rendered = []
+        for event in knowledge_doc.get("events") or []:
+            text = " - ".join([_clean_string(event.get(k)) for k in ("name", "time", "description") if _clean_string(event.get(k))])
+            if text:
+                rendered.append(text)
+        if rendered:
+            return "Otel içi etkinlikler ve saatleri: " + "; ".join(rendered)
+    if any(k in lowered for k in ["ücret", "ucret", "fiyat", "kaç para", "kac para", "ücretsiz", "ucretsiz", "paid", "free", "hizmet"]):
+        rendered = []
+        for service in knowledge_doc.get("paid_services") or []:
+            name = _clean_string(service.get("name"))
+            if not name:
+                continue
+            paid = "ücretli" if service.get("is_paid") else "ücretsiz"
+            price = _clean_string(service.get("price"))
+            desc = _clean_string(service.get("description"))
+            rendered.append(" - ".join([bit for bit in [name, paid, price, desc] if bit]))
+        if rendered:
+            return "Otel içi hizmet ücretleri: " + "; ".join(rendered)
+    if any(k in lowered for k in ["yakın", "yakin", "nearby", "en yakın", "en yakin", "nerede", "çevre", "cevre"]):
+        rendered = []
+        for place in knowledge_doc.get("nearby_places") or []:
+            text = " - ".join([_clean_string(place.get(k)) for k in ("name", "category", "distance", "description") if _clean_string(place.get(k))])
+            if text:
+                rendered.append(text)
+        if rendered:
+            return "Otele yakın yerler en yakından uzağa: " + "; ".join(rendered)
+    general = _clean_string((knowledge_doc.get("general_info") or {}).get("all_information"))
+    if general and any(k in lowered for k in ["otel", "bilgi", "hakkında", "hakkinda", "genel", "tüm", "tum", "hepsi"]):
+        return general
+    faq_hits = []
+    for item in knowledge_doc.get("faq") or []:
+        q = _clean_string(item.get("question"))
+        a = _clean_string(item.get("answer"))
+        if q and a and (q.lower() in lowered or any(word for word in q.lower().split() if len(word) > 4 and word in lowered)):
+            faq_hits.append(a)
+    if faq_hits:
+        return faq_hits[0]
+    field_groups = [
+        ("breakfast", ["kahvalt", "breakfast"], knowledge_doc.get("restaurant", {}).get("breakfast_hours")),
+        ("lunch", ["öğle", "ogle", "lunch"], knowledge_doc.get("restaurant", {}).get("lunch_hours")),
+        ("dinner", ["akşam", "aksam", "dinner"], knowledge_doc.get("restaurant", {}).get("dinner_hours")),
+        ("menu", ["menü", "menu"], knowledge_doc.get("restaurant", {}).get("restaurant_menu")),
+        ("room service", ["oda servisi", "room service"], knowledge_doc.get("restaurant", {}).get("room_service_hours") or knowledge_doc.get("services", {}).get("room_service")),
+        ("wifi", ["wifi", "wi-fi", "internet"], knowledge_doc.get("services", {}).get("wifi")),
+        ("parking", ["otopark", "parking", "park"], knowledge_doc.get("services", {}).get("parking")),
+        ("pool", ["havuz", "pool"], knowledge_doc.get("services", {}).get("swimming_pool")),
+        ("spa", ["spa"], knowledge_doc.get("services", {}).get("spa")),
+        ("sauna", ["sauna"], knowledge_doc.get("services", {}).get("sauna")),
+        ("gym", ["gym", "fitness", "spor"], knowledge_doc.get("services", {}).get("gym")),
+        ("laundry", ["laundry", "çamaşır", "camasir", "kuru temizleme"], knowledge_doc.get("services", {}).get("laundry")),
+        ("airport transfer", ["airport", "havaliman", "transfer"], knowledge_doc.get("services", {}).get("airport_transfer")),
+        ("pet", ["pet", "evcil", "hayvan"], knowledge_doc.get("services", {}).get("pet_policy") or knowledge_doc.get("policies", {}).get("pet_rules")),
+        ("smoking", ["sigara", "smoking"], knowledge_doc.get("policies", {}).get("smoking_policy")),
+        ("cancellation", ["iptal", "cancellation"], knowledge_doc.get("policies", {}).get("cancellation_policy")),
+        ("children", ["çocuk", "cocuk", "child"], knowledge_doc.get("policies", {}).get("child_policy")),
+        ("early checkin", ["erken giriş", "erken giris", "early check"], knowledge_doc.get("policies", {}).get("early_check_in")),
+        ("late checkout", ["geç çıkış", "gec cikis", "late check"], knowledge_doc.get("policies", {}).get("late_check_out")),
+        ("checkin", ["check-in", "check in", "giriş", "giris"], knowledge_doc.get("hotel_info", {}).get("check_in_time")),
+        ("checkout", ["check-out", "check out", "çıkış", "cikis"], knowledge_doc.get("hotel_info", {}).get("check_out_time")),
+        ("address", ["adres", "address", "nerede"], knowledge_doc.get("hotel_info", {}).get("address")),
+        ("phone", ["telefon", "phone", "ara"], knowledge_doc.get("hotel_info", {}).get("phone")),
+        ("email", ["email", "e-posta", "mail"], knowledge_doc.get("hotel_info", {}).get("email")),
+        ("website", ["website", "web sitesi"], knowledge_doc.get("hotel_info", {}).get("website")),
+        ("rooms", ["oda tipi", "room type", "room types"], knowledge_doc.get("rooms", {}).get("room_types")),
+        ("features", ["oda özellik", "room feature", "balkon", "deniz", "sea view", "mini bar", "kasa", "tv", "kahve"], knowledge_doc.get("rooms", {}).get("room_features")),
+    ]
+    for _, keywords, value in field_groups:
+        if any(keyword in lowered for keyword in keywords) and _clean_string(value):
+            return _clean_string(value)
+    nearby_matches = knowledge_doc.get("nearby_places") or []
+    if any(k in lowered for k in ["yakın", "nearby", "eczane", "pharmacy", "plaj", "beach", "airport", "havaliman", "hospital", "hastane", "avm", "shopping"]):
+        rendered = []
+        for place in nearby_matches[:6]:
+            text = " - ".join([_clean_string(place.get(k)) for k in ("name", "category", "distance", "description") if _clean_string(place.get(k))])
+            if text:
+                rendered.append(text)
+        if rendered:
+            return "Yakındaki yerler: " + "; ".join(rendered)
+    for item in knowledge_doc.get("custom_entries") or []:
+        title = _clean_string(item.get("title"))
+        content = _clean_string(item.get("content"))
+        if content and title and any(word in lowered for word in title.lower().split() if len(word) > 3):
+            return content
+    return missing_knowledge_reply() if is_hotel_info_question(message) else None
+
 def normalize_service_meta(raw: Optional[dict]) -> Dict[str, dict]:
     meta: Dict[str, dict] = {}
     raw = raw if isinstance(raw, dict) else {}
@@ -632,12 +1862,16 @@ async def hotel_services_for_user(u: dict) -> Dict[str, bool]:
     return normalize_services(hotel.get("services") if hotel else None)
 
 async def hotel_service_context_for_user(u: dict) -> Dict[str, Any]:
-    hotel = await db.hotels.find_one({"id": user_hotel_id(u)}, {"_id": 0})
+    hotel_id = user_hotel_id(u)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    ai_knowledge = await get_ai_knowledge_doc(hotel_id)
     return {
         "hotel": hotel or {},
         "services": normalize_services(hotel.get("services") if hotel else None),
         "service_meta": normalize_service_meta(hotel.get("service_meta") if hotel else None),
         "knowledge_base": (hotel or {}).get("knowledge_base") or "",
+        "ai_knowledge": ai_knowledge,
+        "ai_knowledge_text": ai_knowledge_to_text(ai_knowledge),
     }
 
 def is_department_service_enabled(services: Dict[str, bool], department: str) -> bool:
@@ -693,6 +1927,204 @@ def validate_stay_dates(check_in: str, check_out: str) -> tuple[str, str]:
         raise HTTPException(400, "Giriş tarihi geçmişte olamaz")
     return ci.strftime("%Y-%m-%d"), co.strftime("%Y-%m-%d")
 
+def nights_between(check_in: str, check_out: str) -> int:
+    ci = parse_iso_date(check_in)
+    co = parse_iso_date(check_out)
+    return max(0, (co - ci).days)
+
+def room_type_value(room: dict) -> RoomType:
+    raw = room.get("room_type") or room.get("type") or "Standard"
+    return raw if raw in ("Standard", "Deluxe", "Suite", "Family", "VIP") else "Standard"
+
+def room_operational_status(room: dict) -> RoomOperationalStatus:
+    raw = room.get("operational_status")
+    if raw in ("cleaning", "maintenance"):
+        return raw
+    legacy = room.get("status")
+    if legacy in ("cleaning", "maintenance", "out_of_service"):
+        return "maintenance" if legacy == "out_of_service" else legacy
+    return "normal"
+
+def room_base_filter(hotel_id: str, extra: Optional[dict] = None) -> dict:
+    q = dict(extra or {})
+    q["$or"] = [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]
+    return q
+
+def reservation_overlap_filter(check_in: str, check_out: str) -> dict:
+    return {
+        "status": {"$in": ["pending", "checked_in"]},
+        "check_in_date": {"$lt": check_out},
+        "check_out_date": {"$gt": check_in},
+    }
+
+def reservation_room_filter(room: dict) -> dict:
+    clauses = []
+    if room.get("id"):
+        clauses.append({"room_id": room["id"]})
+    if room.get("room_number"):
+        clauses.append({"room_number": room["room_number"]})
+    return {"$or": clauses} if clauses else {"room_id": "__none__"}
+
+async def active_room_reservation(room: dict, check_in: str, check_out: str, exclude_reservation_id: Optional[str] = None) -> Optional[dict]:
+    hotel_id = room.get("hotelId") or room.get("hotel_id") or DEFAULT_HOTEL_ID
+    q = {
+        "$and": [
+            room_base_filter(hotel_id),
+            reservation_room_filter(room),
+            reservation_overlap_filter(check_in, check_out),
+        ]
+    }
+    if exclude_reservation_id:
+        q["$and"].append({"id": {"$ne": exclude_reservation_id}})
+    return await db.reservations.find_one(q, {"_id": 0})
+
+async def active_room_cleaning_request(room: dict) -> Optional[dict]:
+    hotel_id = room.get("hotelId") or room.get("hotel_id") or DEFAULT_HOTEL_ID
+    room_number = (room.get("room_number") or "").strip()
+    if not room_number:
+        return None
+    return await db.requests.find_one(
+        {
+            "$and": [
+                room_base_filter(hotel_id),
+                {
+                    "departman": "housekeeping",
+                    "room_no": room_number,
+                    "status": {"$in": ["ALINDI", "PERSONEL_GIDIYOR"]},
+                },
+            ]
+        },
+        {"_id": 0},
+    )
+
+async def get_room_effective_status(room: dict) -> tuple[RoomStatus, Optional[dict]]:
+    if not room.get("is_active", True):
+        return "maintenance", None
+    op = room_operational_status(room)
+    if op == "maintenance":
+        return "maintenance", None
+    if op == "cleaning":
+        return "cleaning", None
+    if await active_room_cleaning_request(room):
+        return "cleaning", None
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    active = await active_room_reservation(room, today, (parse_iso_date(today) + timedelta(days=1)).strftime("%Y-%m-%d"))
+    if active:
+        return ("occupied" if active.get("status") == "checked_in" else "reserved"), active
+    return "available", None
+
+def normalize_room_payload(body: RoomIn | RoomUpdateIn, existing: Optional[dict] = None) -> dict:
+    raw = body.model_dump(exclude_unset=existing is not None)
+    update: Dict[str, Any] = {}
+    if "room_number" in raw and raw.get("room_number") is not None:
+        rn = str(raw["room_number"]).strip()
+        if not rn:
+            raise HTTPException(400, "Oda numarası gerekli")
+        update["room_number"] = rn
+    if "room_name" in raw:
+        update["room_name"] = (raw.get("room_name") or "").strip() or None
+    room_type = raw.get("room_type") or raw.get("type")
+    if room_type is not None:
+        if room_type not in ("Standard", "Deluxe", "Suite", "Family", "VIP"):
+            raise HTTPException(400, "Geçersiz oda tipi")
+        update["room_type"] = room_type
+        update["type"] = room_type
+    if "floor" in raw:
+        update["floor"] = (str(raw.get("floor")).strip() if raw.get("floor") is not None else None)
+    if "capacity" in raw and raw.get("capacity") is not None:
+        cap = int(raw["capacity"])
+        if cap < 1 or cap > 4:
+            raise HTTPException(400, "Kapasite 1-4 kişi arasında olmalı")
+        update["capacity"] = cap
+    if "price_per_night" in raw and raw.get("price_per_night") is not None:
+        price = float(raw["price_per_night"])
+        if price < 0:
+            raise HTTPException(400, "Oda fiyatı negatif olamaz")
+        update["price_per_night"] = price
+    if "operational_status" in raw and raw.get("operational_status") is not None:
+        update["operational_status"] = raw["operational_status"]
+    if "is_active" in raw and raw.get("is_active") is not None:
+        update["is_active"] = bool(raw["is_active"])
+    if "description" in raw:
+        update["description"] = (raw.get("description") or "").strip() or None
+    return update
+
+async def public_room(r: dict) -> "RoomOut":
+    status_value, active = await get_room_effective_status(r)
+    room_type = room_type_value(r)
+    return RoomOut(
+        id=r["id"],
+        room_number=r["room_number"],
+        room_name=r.get("room_name"),
+        room_type=room_type,
+        type=room_type,
+        floor=r.get("floor"),
+        capacity=int(r.get("capacity") or 2),
+        price_per_night=float(r.get("price_per_night") or 0),
+        status=status_value,
+        operational_status=room_operational_status(r),
+        is_active=r.get("is_active", True),
+        description=r.get("description"),
+        current_guest_name=active.get("customer_name") if active else None,
+        active_reservation_id=active.get("id") if active else None,
+        created_at=r.get("created_at") or now_iso(),
+        updated_at=r.get("updated_at") or r.get("created_at") or now_iso(),
+    )
+
+async def find_available_rooms(check_in: str, check_out: str, capacity: int, hotel_id: str, exclude_reservation_id: Optional[str] = None) -> list[dict]:
+    docs = await db.rooms.find(
+        room_base_filter(hotel_id, {"is_active": {"$ne": False}, "capacity": {"$gte": capacity}}),
+        {"_id": 0},
+    ).sort([("floor", 1), ("room_number", 1)]).to_list(1000)
+    available: list[dict] = []
+    for room in docs:
+        if room_operational_status(room) != "normal":
+            continue
+        if await active_room_cleaning_request(room):
+            continue
+        if await active_room_reservation(room, check_in, check_out, exclude_reservation_id):
+            continue
+        available.append(room)
+    return available
+
+async def resolve_room_for_reservation(
+    hotel_id: str,
+    check_in: str,
+    check_out: str,
+    capacity: int,
+    room_id: Optional[str] = None,
+    room_number: Optional[str] = None,
+    exclude_reservation_id: Optional[str] = None,
+) -> Optional[dict]:
+    if not room_id and not room_number:
+        return None
+    extra = {"id": room_id} if room_id else {"room_number": (room_number or "").strip()}
+    room = await db.rooms.find_one(room_base_filter(hotel_id, extra), {"_id": 0})
+    if not room:
+        raise HTTPException(404, "Oda bulunamadı")
+    if not room.get("is_active", True) or int(room.get("capacity") or 0) < capacity or room_operational_status(room) != "normal":
+        raise HTTPException(409, "Seçilen oda uygun değil")
+    if await active_room_cleaning_request(room):
+        raise HTTPException(409, "Seçilen oda temizlikte")
+    conflict = await active_room_reservation(room, check_in, check_out, exclude_reservation_id)
+    if conflict:
+        raise HTTPException(409, "Seçilen oda bu tarihlerde uygun değil")
+    return room
+
+def room_reservation_snapshot(room: Optional[dict], check_in: str, check_out: str) -> dict:
+    if not room:
+        return {"room_id": None, "room_number": None, "room_name": None, "price_per_night": None, "total_nights": None, "total_price": None}
+    nights = nights_between(check_in, check_out)
+    price = float(room.get("price_per_night") or 0)
+    return {
+        "room_id": room.get("id"),
+        "room_number": room.get("room_number"),
+        "room_name": room.get("room_name"),
+        "price_per_night": price,
+        "total_nights": nights,
+        "total_price": price * nights,
+    }
+
 
 def _format_tr_date(iso: Optional[str]) -> str:
     if not iso:
@@ -707,16 +2139,18 @@ async def send_reservation_email(reservation: dict) -> bool:
     """Send reservation confirmation via Resend. Returns True if dispatched.
     If RESEND_API_KEY is empty, logs the email content (sandbox/dev mode)."""
     to = reservation["customer_email"]
-    code = reservation["access_code"]
+    identity_requested = bool(reservation.get("identity_verification_requested"))
+    identity_verified = public_reservation_identity_status(reservation.get("identity_status"), identity_requested) == "fully_verified"
+    code = reservation["access_code"] if (not identity_requested or identity_verified) else "Kimlik doğrulaması sonrası paylaşılacak"
     name = reservation["customer_name"]
     ci = _format_tr_date(reservation.get("check_in_date"))
     co = _format_tr_date(reservation.get("check_out_date"))
     room = reservation.get("room_number") or "Otele girişte atanacak"
-    subject = f"Rezervasyon Onayı · Kod: {code}"
+    subject = f"Rezervasyon Onayı{' · Kimlik doğrulaması bekleniyor' if identity_requested and not identity_verified else f' · Kod: {code}'}"
     html = f"""<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0F0F11;color:#F5F5F5;margin:0;padding:24px;">
 <div style="max-width:520px;margin:0 auto;background:#1A1A1D;border:1px solid #26262A;border-radius:16px;padding:32px;">
   <h1 style="color:#D4AF37;font-family:Georgia,serif;margin:0 0 8px 0;">Hoş Geldiniz, {name}</h1>
-  <p style="color:#D1D1D1;line-height:1.55;margin:0 0 24px 0;">Rezervasyonunuz başarıyla oluşturuldu. Aşağıdaki kodu otele giriş yaparken kullanacaksınız.</p>
+  <p style="color:#D1D1D1;line-height:1.55;margin:0 0 24px 0;">Rezervasyonunuz başarıyla oluşturuldu. {('Kimlik doğrulaması onaylandıktan sonra giriş kodunuz paylaşılacaktır.' if identity_requested and not identity_verified else 'Aşağıdaki kodu otele giriş yaparken kullanacaksınız.')}</p>
   <div style="background:#3A3320;border:1px solid #D4AF37;border-radius:12px;padding:20px;text-align:center;margin:24px 0;">
     <div style="color:#F2E3B6;font-size:11px;letter-spacing:2px;text-transform:uppercase;">Rezervasyon Kodu</div>
     <div style="color:#D4AF37;font-size:36px;font-weight:800;letter-spacing:6px;margin-top:8px;font-family:Georgia,serif;">{code}</div>
@@ -940,6 +2374,9 @@ def fallback_orchestrate(message: str, history: List[dict], service_context: Opt
     # Aggregate context from previous user messages
     full = " ".join([h["content"] for h in history if h["role"] == "user"] + [message])
     if service_context:
+        kb_reply = knowledge_answer(full, service_context.get("ai_knowledge"))
+        if kb_reply:
+            return {"reply": kb_reply, "ready": False, "request": None}
         answer = service_answer(full, service_context, user)
         if answer:
             return answer
@@ -966,6 +2403,9 @@ def fallback_orchestrate(message: str, history: List[dict], service_context: Opt
 
 async def orchestrate(session_id: str, message: str, history: List[dict], service_context: Optional[Dict[str, Any]] = None, user: Optional[dict] = None) -> Dict[str, Any]:
     if service_context:
+        kb_reply = knowledge_answer(message, service_context.get("ai_knowledge"))
+        if kb_reply:
+            return {"reply": kb_reply, "ready": False, "request": None}
         answer = service_answer(message, service_context, user)
         if answer:
             return answer
@@ -980,7 +2420,9 @@ async def orchestrate(session_id: str, message: str, history: List[dict], servic
                 f"Aktif: {', '.join(enabled) or 'Yok'}\n"
                 f"Pasif: {', '.join(disabled) or 'Yok'}\n"
                 "Bilgi tabanı: " + str((service_context or {}).get("knowledge_base") or "Yok") + "\n"
-                "Misafir servis sorarsa bu listeye göre cevap ver. Pasif servisten talep oluşturma. Talep oluşturmak için mutlaka önce onay iste."
+                "\nAI_KNOWLEDGE_BASE:\n"
+                + str((service_context or {}).get("ai_knowledge_text") or "Bu otel için AI bilgi tabanı boş.") +
+                "\nKurallar: Otel bilgisi sorularında yalnızca AI_KNOWLEDGE_BASE ve aktif servis listesini kullan. Bilgi yoksa uydurma; misafiri resepsiyona yönlendir. Başka otel bilgisi verme. Pasif servisten talep oluşturma. Talep oluşturmak için mutlaka önce onay iste."
             )
             return await call_llm(session_id, message + prompt_service_context, history)
         except Exception as e:
@@ -1027,9 +2469,13 @@ async def login(body: LoginIn):
     if not verify_password(body.password, u["password_hash"]):
         raise HTTPException(401, "E-posta veya şifre hatalı")
     if u.get("active") is False:
+        if role_of(u) == "staff" and u.get("identity_status") and u.get("identity_status") not in {"verified_by_hotel", "approved", "active_employee"}:
+            raise HTTPException(403, "Çalışan kimlik doğrulaması onaylanmadan personel paneline giriş yapılamaz")
         raise HTTPException(403, "Hesap devre dışı")
     selected_hotel = await ensure_active_hotel_or_none(body.selected_hotel_id)
     role = role_of(u)
+    if role == "staff" and u.get("identity_status") and u.get("identity_status") not in {"verified_by_hotel", "approved", "active_employee"}:
+        raise HTTPException(403, "Çalışan kimlik doğrulaması onaylanmadan personel paneline giriş yapılamaz")
     assigned_hotel_id = u.get("hotelId") or u.get("hotel_id")
 
     if role in ("hotel_manager", "staff", "guest"):
@@ -1215,6 +2661,436 @@ async def chat_history(session_id: str, u: dict = Depends(get_current_user)):
     return docs
 
 # --------------------------------------------------------------------------
+# Identity Verification
+# --------------------------------------------------------------------------
+@api.post("/identity/start", response_model=IdentityVerificationOut)
+async def identity_start(body: IdentityStartIn = IdentityStartIn(), u: dict = Depends(get_current_user)):
+    target = await get_identity_target_user(u, body)
+    target_role = role_of(target)
+    if target_role not in ("guest", "staff"):
+        raise HTTPException(400, "Kimlik doğrulama yalnızca misafir veya çalışan için başlatılabilir")
+    subject_type = body.subject_type or user_subject_type(target)
+    hotel_id = target.get("hotelId") or target.get("hotel_id") or user_hotel_id(u)
+    existing = await db.identity_verifications.find_one({"user_id": target["id"]}, {"_id": 0})
+    if existing:
+        await audit_identity(u, "identity.start.existing", existing["id"], target["id"], hotel_id)
+        return await public_identity_verification(existing)
+    now = now_iso()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": target["id"],
+        "hotel_id": hotel_id,
+        "hotelId": hotel_id,
+        "role": target_role,
+        "subject_type": subject_type,
+        "status": identity_initial_status(subject_type),
+        "profile": {},
+        "encrypted_profile": {},
+        "masked_document_number": None,
+        "created_by": u["id"],
+        "updated_by": u["id"],
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.identity_verifications.insert_one(doc.copy())
+    await append_verification_history({**doc, "status": None}, u, doc["status"], "Kimlik doğrulama başlatıldı")
+    await audit_identity(u, "identity.start", doc["id"], target["id"], hotel_id)
+    return await public_identity_verification(doc)
+
+@api.get("/identity/me", response_model=IdentityVerificationOut)
+async def identity_me(u: dict = Depends(get_current_user)):
+    require_roles(u, "guest", "staff")
+    doc = await db.identity_verifications.find_one({"user_id": u["id"]}, {"_id": 0})
+    if not doc:
+        return await identity_start(IdentityStartIn(), u)
+    return await public_identity_verification(doc)
+
+@api.put("/identity/me", response_model=IdentityVerificationOut)
+async def identity_update_me(body: IdentityProfileIn, u: dict = Depends(get_current_user)):
+    require_roles(u, "guest", "staff")
+    doc = await db.identity_verifications.find_one({"user_id": u["id"]}, {"_id": 0})
+    if not doc:
+        doc = (await identity_start(IdentityStartIn(), u)).model_dump()
+    if not can_access_verification(u, doc, write=True):
+        raise HTTPException(403, "Bu kayıt güncellenemez")
+    subject_type = doc.get("subject_type") or user_subject_type(u)
+    profile = {
+        "first_name": body.first_name.strip(),
+        "last_name": body.last_name.strip(),
+        "birth_date": validate_birth_date(body.birth_date),
+        "nationality": body.nationality.strip(),
+        "document_type": body.document_type.strip(),
+        "document_expiry_date": body.document_expiry_date.strip() if body.document_expiry_date else None,
+        "employee_role": body.employee_role.strip() if body.employee_role else (u.get("department") if subject_type == "employee" else None),
+        "employment_start_date": body.employment_start_date.strip() if body.employment_start_date else None,
+        "manager_approved": bool(body.manager_approved) if body.manager_approved is not None else False,
+        "internal_notes": body.internal_notes.strip() if body.internal_notes else None,
+    }
+    if not profile["first_name"] or not profile["last_name"] or not profile["nationality"] or not profile["document_type"] or not body.document_number.strip():
+        raise HTTPException(400, "Zorunlu kimlik alanları eksik")
+    next_status = identity_submitted_status(subject_type)
+    update = {
+        "profile": profile,
+        "encrypted_profile": {"document_number": encrypt_sensitive(body.document_number)},
+        "masked_document_number": mask_identity_number(body.document_number),
+        "document_fingerprint": identity_fingerprint(body.document_number),
+        "status": next_status,
+        "updated_by": u["id"],
+        "updated_at": now_iso(),
+    }
+    await append_verification_history(doc, u, next_status, "Kimlik bilgileri gönderildi")
+    await db.identity_verifications.update_one({"id": doc["id"]}, {"$set": update})
+    await audit_identity(u, "identity.profile.update", doc["id"], u["id"], doc.get("hotel_id"))
+    fresh = await load_verification(doc["id"])
+    return await public_identity_verification(fresh)
+
+@api.get("/manager/identity", response_model=List[IdentityVerificationOut])
+async def manager_identity_list(u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    docs = await db.identity_verifications.find(with_hotel_scope(u), {"_id": 0}).sort("updated_at", -1).to_list(500)
+    return [await public_identity_verification(d) for d in docs]
+
+@api.get("/system/identity", response_model=List[IdentityVerificationOut])
+async def system_identity_list(hotel_id: Optional[str] = None, u: dict = Depends(get_current_user)):
+    require_roles(u, "system_admin")
+    q: dict = {}
+    if hotel_id:
+        q = {"$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]}
+    docs = await db.identity_verifications.find(q, {"_id": 0}).sort("updated_at", -1).to_list(1000)
+    return [await public_identity_verification(d) for d in docs]
+
+async def identity_decision(verification_id: str, u: dict, status_value: str, action: str, note: Optional[str] = None) -> IdentityVerificationOut:
+    doc = await load_verification(verification_id)
+    if not can_access_verification(u, doc, write=True) or role_of(u) not in ("hotel_manager", "system_admin"):
+        raise HTTPException(403, "Bu doğrulama için yetkiniz yok")
+    update = {"status": status_value, "updated_by": u["id"], "updated_at": now_iso()}
+    if status_value in ("approved", "verified", "verified_by_hotel", "active_employee"):
+        update["profile.manager_approved"] = True
+    await append_verification_history(doc, u, status_value, note)
+    await db.identity_verifications.update_one({"id": verification_id}, {"$set": update})
+    user_update = {"identity_status": status_value}
+    if doc.get("subject_type") == "employee":
+        user_update["active"] = status_value in {"verified_by_hotel", "approved", "active_employee"}
+    await db.users.update_one({"id": doc.get("user_id")}, {"$set": user_update})
+    if doc.get("reservation_id"):
+        synced = await sync_reservation_identity_status(doc["reservation_id"])
+        if synced and synced.get("identity_status") == "verification_failed":
+            await create_identity_alert(
+                doc.get("hotel_id") or DEFAULT_HOTEL_ID,
+                doc["reservation_id"],
+                "Identity verification failed",
+                f"Identity verification failed for reservation #{doc['reservation_id']}. Manual review is required.",
+                "danger",
+            )
+        elif synced and synced.get("identity_status") == "fully_verified":
+            await create_identity_alert(
+                doc.get("hotel_id") or DEFAULT_HOTEL_ID,
+                doc["reservation_id"],
+                "Identity verification completed",
+                f"All guests verified for reservation #{doc['reservation_id']}. Hotel entry code generated.",
+                "success",
+            )
+    if status_value in {"rejected", "suspicious", "needs_new_documents"}:
+        await create_identity_alert(
+            doc.get("hotel_id") or DEFAULT_HOTEL_ID,
+            doc.get("reservation_id") or doc.get("user_id"),
+            "Identity verification needs attention",
+            f"{status_value}: manual review required.",
+            "danger" if status_value in {"rejected", "suspicious"} else "warning",
+        )
+    await audit_identity(u, action, verification_id, doc.get("user_id"), doc.get("hotel_id"), {"note": note})
+    fresh = await load_verification(verification_id)
+    return await public_identity_verification(fresh)
+
+@api.post("/identity/{verification_id}/approve", response_model=IdentityVerificationOut)
+async def identity_approve(verification_id: str, body: IdentityDecisionIn, u: dict = Depends(get_current_user)):
+    return await identity_decision(verification_id, u, "verified_by_hotel", "identity.approve", body.note)
+
+@api.post("/identity/{verification_id}/reject", response_model=IdentityVerificationOut)
+async def identity_reject(verification_id: str, body: IdentityDecisionIn, u: dict = Depends(get_current_user)):
+    return await identity_decision(verification_id, u, "rejected", "identity.reject", body.note)
+
+@api.post("/identity/{verification_id}/request-documents", response_model=IdentityVerificationOut)
+async def identity_request_documents(verification_id: str, body: IdentityDecisionIn, u: dict = Depends(get_current_user)):
+    return await identity_decision(verification_id, u, "needs_new_documents", "identity.request_documents", body.note)
+
+@api.post("/identity/{verification_id}/activate-employee", response_model=IdentityVerificationOut)
+async def identity_activate_employee(verification_id: str, body: IdentityDecisionIn, u: dict = Depends(get_current_user)):
+    doc = await load_verification(verification_id)
+    if doc.get("subject_type") != "employee":
+        raise HTTPException(400, "Yalnızca çalışan kaydı aktif çalışan yapılabilir")
+    return await identity_decision(verification_id, u, "active_employee", "identity.activate_employee", body.note)
+
+@api.get("/identity/{verification_id}/history", response_model=List[VerificationHistoryOut])
+async def identity_history(verification_id: str, u: dict = Depends(get_current_user)):
+    doc = await load_verification(verification_id)
+    if not can_access_verification(u, doc, write=False):
+        raise HTTPException(403, "Bu geçmişe erişim yetkiniz yok")
+    rows = await db.verification_history.find({"verification_id": verification_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    await audit_identity(u, "identity.history.view", verification_id, doc.get("user_id"), doc.get("hotel_id"))
+    return [VerificationHistoryOut(**r) for r in rows]
+
+@api.post("/identity/{verification_id}/documents", response_model=IdentityDocumentOut)
+async def identity_upload_document(verification_id: str, body: IdentityDocumentUploadIn, u: dict = Depends(get_current_user)):
+    doc = await load_verification(verification_id)
+    if not can_access_verification(u, doc, write=True):
+        raise HTTPException(403, "Belge yükleme yetkiniz yok")
+    if doc.get("user_id") != u.get("id") and role_of(u) not in ("hotel_manager", "system_admin"):
+        raise HTTPException(403, "Bu kayıt için belge yükleyemezsiniz")
+    detected_mime, data = parse_data_uri(body.data_uri)
+    mime_type = (body.mime_type or detected_mime or "application/octet-stream").strip()
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+    if mime_type not in {"image/jpeg", "image/png", "application/pdf"}:
+        raise HTTPException(400, "Desteklenmeyen belge türü")
+    checksum = hashlib.sha256(data).hexdigest()
+    quality = await identity_provider.analyze_document(data, mime_type)
+    if quality.get("is_low_resolution") or quality.get("is_blurry"):
+        raise HTTPException(400, "Belge kalitesi yetersiz; daha net ve yüksek çözünürlüklü belge yükleyin")
+    perceptual_hash = average_hash(data) if mime_type.startswith("image/") else None
+    duplicates = await duplicate_signals(doc, doc.get("document_fingerprint"), checksum, perceptual_hash)
+    encrypted_data = identity_encrypt_bytes(data)
+    out = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "document_type": body.document_type,
+        "file_name": Path(body.file_name or body.document_type).name,
+        "mime_type": mime_type,
+        "size": len(data),
+        "checksum": checksum,
+        "perceptual_hash": perceptual_hash,
+        "quality": quality,
+        "duplicate_signals": duplicates,
+        "encrypted_data": encrypted_data,
+        "uploaded_by": u["id"],
+        "hotel_id": doc.get("hotel_id"),
+        "hotelId": doc.get("hotel_id"),
+        "created_at": now_iso(),
+    }
+    await db.identity_documents.insert_one(out.copy())
+    next_status = identity_submitted_status(doc.get("subject_type") or "guest")
+    if duplicates:
+        next_status = "suspicious"
+    await append_verification_history(doc, u, next_status, f"{body.document_type} belgesi yüklendi")
+    await db.identity_verifications.update_one({"id": verification_id}, {"$set": {"status": next_status, "updated_by": u["id"], "updated_at": now_iso()}})
+    await audit_identity(u, "identity.document.upload", verification_id, doc.get("user_id"), doc.get("hotel_id"), {"document_type": body.document_type, "size": len(data)})
+    return IdentityDocumentOut(**{k: v for k, v in out.items() if k != "encrypted_data"})
+
+@api.get("/identity/liveness-challenge", response_model=LivenessChallengeOut)
+async def identity_liveness_challenge(u: dict = Depends(get_current_user)):
+    require_roles(u, "guest", "staff")
+    actions = ["turn_left", "turn_right", "look_up", "look_down", "blink", "smile"]
+    selected = secrets.SystemRandom().sample(actions, 3)
+    now = datetime.now(timezone.utc)
+    challenge = {
+        "id": str(uuid.uuid4()),
+        "user_id": u["id"],
+        "actions": selected,
+        "expires_at": (now + timedelta(minutes=10)).isoformat(),
+        "created_at": now.isoformat(),
+    }
+    await db.identity_liveness_challenges.insert_one(challenge.copy())
+    return LivenessChallengeOut(**challenge)
+
+@api.post("/identity/{verification_id}/selfie", response_model=FaceResultOut)
+async def identity_upload_selfie(verification_id: str, body: SelfieUploadIn, u: dict = Depends(get_current_user)):
+    verification = await load_verification(verification_id)
+    if not can_access_verification(u, verification, write=True):
+        raise HTTPException(403, "Selfie yükleme yetkiniz yok")
+    if verification.get("user_id") != u.get("id"):
+        raise HTTPException(403, "Selfie yalnızca kayıt sahibi tarafından yüklenebilir")
+    detected_mime, data = parse_data_uri(body.data_uri)
+    mime_type = (body.mime_type or detected_mime or "image/jpeg").strip()
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+    if mime_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(400, "Selfie JPG veya PNG olmalı")
+    if body.challenge_id:
+        challenge = await db.identity_liveness_challenges.find_one({"id": body.challenge_id, "user_id": u["id"]}, {"_id": 0})
+        if not challenge:
+            raise HTTPException(400, "Liveness challenge bulunamadı")
+        expected = set(challenge.get("actions") or [])
+        if not expected.issubset(set(body.completed_actions)):
+            raise HTTPException(400, "Liveness adımları tamamlanmadı")
+    checksum = hashlib.sha256(data).hexdigest()
+    quality = await identity_provider.analyze_document(data, mime_type)
+    selfie_doc = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "document_type": "selfie",
+        "file_name": Path(body.file_name or "selfie.jpg").name,
+        "mime_type": mime_type,
+        "size": len(data),
+        "checksum": checksum,
+        "perceptual_hash": average_hash(data),
+        "quality": quality,
+        "encrypted_data": identity_encrypt_bytes(data),
+        "uploaded_by": u["id"],
+        "hotel_id": verification.get("hotel_id"),
+        "hotelId": verification.get("hotel_id"),
+        "created_at": now_iso(),
+    }
+    await db.identity_documents.insert_one(selfie_doc.copy())
+    document = await db.identity_documents.find_one({"verification_id": verification_id, "document_type": {"$in": ["id_front", "passport"]}}, {"_id": 0}, sort=[("created_at", -1)])
+    face = await identity_provider.run_face_comparison(selfie_doc, document, body.completed_actions)
+    result = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "provider": identity_provider.name,
+        "created_at": now_iso(),
+        **face,
+    }
+    await db.identity_face_results.insert_one(result.copy())
+    await append_verification_history(verification, u, "pending_review", "Canlı selfie ve liveness adımları gönderildi")
+    await db.identity_verifications.update_one({"id": verification_id}, {"$set": {"status": "pending_review", "updated_by": u["id"], "updated_at": now_iso()}})
+    await audit_identity(u, "identity.selfie.upload", verification_id, verification.get("user_id"), verification.get("hotel_id"), {"completed_actions": body.completed_actions})
+    return FaceResultOut(**result)
+
+@api.post("/identity/{verification_id}/run-ocr", response_model=OcrResultOut)
+async def identity_run_ocr(verification_id: str, u: dict = Depends(get_current_user)):
+    verification = await load_verification(verification_id)
+    if not can_access_verification(u, verification, write=False):
+        raise HTTPException(403, "OCR çalıştırma yetkiniz yok")
+    document = await db.identity_documents.find_one({"verification_id": verification_id, "document_type": {"$in": ["id_front", "passport"]}}, {"_id": 0}, sort=[("created_at", -1)])
+    if not document:
+        raise HTTPException(400, "OCR için belge bulunamadı")
+    data = identity_decrypt_bytes(document["encrypted_data"])
+    ocr = await identity_provider.run_ocr(data, document.get("mime_type") or "image/jpeg", verification.get("profile") or {}, verification.get("masked_document_number"))
+    result = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "provider": identity_provider.name,
+        "created_at": now_iso(),
+        **ocr,
+    }
+    await db.identity_ocr_results.insert_one(result.copy())
+    next_status = "needs_review" if ocr.get("status") in ("unavailable", "failed") or ocr.get("mismatches") else "pending_review"
+    await db.identity_verifications.update_one({"id": verification_id}, {"$set": {"status": next_status, "updated_by": u["id"], "updated_at": now_iso()}})
+    await append_verification_history(verification, u, next_status, "OCR analizi çalıştırıldı")
+    await audit_identity(u, "identity.ocr.run", verification_id, verification.get("user_id"), verification.get("hotel_id"), {"status": ocr.get("status"), "mismatches": ocr.get("mismatches")})
+    return OcrResultOut(**result)
+
+@api.post("/identity/{verification_id}/run-face-comparison", response_model=FaceResultOut)
+async def identity_run_face_comparison(verification_id: str, u: dict = Depends(get_current_user)):
+    verification = await load_verification(verification_id)
+    if not can_access_verification(u, verification, write=False):
+        raise HTTPException(403, "Face comparison çalıştırma yetkiniz yok")
+    selfie = await db.identity_documents.find_one({"verification_id": verification_id, "document_type": "selfie"}, {"_id": 0}, sort=[("created_at", -1)])
+    if not selfie:
+        raise HTTPException(400, "Selfie bulunamadı")
+    document = await db.identity_documents.find_one({"verification_id": verification_id, "document_type": {"$in": ["id_front", "passport"]}}, {"_id": 0}, sort=[("created_at", -1)])
+    previous = await latest_analysis("identity_face_results", verification_id)
+    completed_actions = (previous or {}).get("completed_actions") or []
+    face = await identity_provider.run_face_comparison(selfie, document, completed_actions)
+    result = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "provider": identity_provider.name,
+        "created_at": now_iso(),
+        **face,
+    }
+    await db.identity_face_results.insert_one(result.copy())
+    await append_verification_history(verification, u, "pending_review", "Yüz karşılaştırma analizi çalıştırıldı")
+    await audit_identity(u, "identity.face.run", verification_id, verification.get("user_id"), verification.get("hotel_id"), {"similarity_score": face.get("similarity_score")})
+    return FaceResultOut(**result)
+
+@api.post("/identity/{verification_id}/run-fraud-analysis", response_model=FraudAnalysisOut)
+async def identity_run_fraud_analysis(verification_id: str, u: dict = Depends(get_current_user)):
+    verification = await load_verification(verification_id)
+    if not can_access_verification(u, verification, write=False):
+        raise HTTPException(403, "Fraud analizi çalıştırma yetkiniz yok")
+    docs = await db.identity_documents.find({"verification_id": verification_id}, {"_id": 0}).to_list(100)
+    latest_ocr = await latest_analysis("identity_ocr_results", verification_id)
+    latest_face = await latest_analysis("identity_face_results", verification_id)
+    signals: list[str] = []
+    duplicate_hits: list[str] = []
+    score = 100
+    if not docs:
+        signals.append("missing_documents")
+        score -= 35
+    for item in docs:
+        quality = item.get("quality") or {}
+        if quality.get("is_blurry"):
+            signals.append("blurry_document")
+            score -= 20
+        if quality.get("is_low_resolution"):
+            signals.append("low_resolution_document")
+            score -= 20
+        if quality.get("crop_risk"):
+            signals.append("crop_risk")
+            score -= 10
+        duplicate_hits.extend(item.get("duplicate_signals") or [])
+    duplicate_hits.extend(await duplicate_signals(verification, verification.get("document_fingerprint")))
+    duplicate_hits = sorted(set(duplicate_hits))
+    if duplicate_hits:
+        signals.append("duplicate_detected")
+        score -= 35
+    if not latest_ocr:
+        signals.append("ocr_not_run")
+        score -= 10
+    elif latest_ocr.get("status") != "completed":
+        signals.append("ocr_unavailable")
+        score -= 15
+    elif latest_ocr.get("mismatches"):
+        signals.extend([f"ocr_mismatch:{m}" for m in latest_ocr.get("mismatches", [])])
+        score -= 25
+    if not latest_face:
+        signals.append("face_not_run")
+        score -= 10
+    else:
+        if not latest_face.get("face_present"):
+            signals.append("selfie_face_missing")
+            score -= 25
+        if latest_face.get("similarity_score", 0) < 50:
+            signals.append("low_face_similarity")
+            score -= 15
+        if latest_face.get("liveness_score", 0) < 70:
+            signals.append("liveness_incomplete")
+            score -= 15
+    score = max(0, min(100, int(score)))
+    if score >= 75 and not duplicate_hits:
+        risk, recommended = "low", "pending_review"
+    elif score >= 45:
+        risk, recommended = "medium", "needs_review"
+    else:
+        risk, recommended = "high", "suspicious"
+    if any(s in signals for s in ["missing_documents", "blurry_document", "low_resolution_document"]):
+        recommended = "needs_new_documents"
+    result = {
+        "id": str(uuid.uuid4()),
+        "verification_id": verification_id,
+        "status": "completed",
+        "fraud_risk": risk,
+        "confidence_score": score,
+        "signals": sorted(set(signals)),
+        "duplicate_hits": duplicate_hits,
+        "recommended_status": recommended,
+        "provider": identity_provider.name,
+        "created_at": now_iso(),
+    }
+    await db.identity_fraud_analysis.insert_one(result.copy())
+    await db.identity_verifications.update_one({"id": verification_id}, {"$set": {"status": recommended, "updated_by": u["id"], "updated_at": now_iso()}})
+    await append_verification_history(verification, u, recommended, "Fraud ve confidence analizi çalıştırıldı")
+    await audit_identity(u, "identity.fraud.run", verification_id, verification.get("user_id"), verification.get("hotel_id"), {"risk": risk, "score": score, "signals": result["signals"]})
+    return FraudAnalysisOut(**result)
+
+@api.get("/identity/{verification_id}/documents/{document_id}")
+async def identity_get_document(verification_id: str, document_id: str, u: dict = Depends(get_current_user)):
+    verification = await load_verification(verification_id)
+    if not can_access_verification(u, verification, write=False):
+        raise HTTPException(403, "Belgeye erişim yetkiniz yok")
+    doc = await db.identity_documents.find_one({"id": document_id, "verification_id": verification_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Belge bulunamadı")
+    try:
+        data = identity_decrypt_bytes(doc["encrypted_data"])
+    except ValueError:
+        raise HTTPException(500, "Belge şifresi çözülemedi")
+    await audit_identity(u, "identity.document.view", verification_id, verification.get("user_id"), verification.get("hotel_id"), {"document_id": document_id})
+    headers = {"Content-Disposition": f"inline; filename=\"{doc.get('file_name') or 'document'}\""}
+    return Response(content=data, media_type=doc.get("mime_type") or "application/octet-stream", headers=headers)
+
+# --------------------------------------------------------------------------
 # Voice transcription
 # --------------------------------------------------------------------------
 @api.post("/voice/transcribe")
@@ -1394,6 +3270,12 @@ async def admin_stats(u: dict = Depends(get_current_user)):
         by_dept[code] = {"name": name, "active": c}
     return {"total": total, "active": active, "completed": completed, "urgent": urgent, "by_department": by_dept}
 
+@api.get("/manager/identity-alerts")
+async def manager_identity_alerts(u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    docs = await db.identity_alerts.find(with_hotel_scope(u), {"_id": 0}).sort("created_at", -1).to_list(50)
+    return docs
+
 @api.get("/meta/departments")
 async def meta_departments():
     return [{"code": k, "name": v} for k, v in DEPARTMENTS.items()]
@@ -1401,11 +3283,18 @@ async def meta_departments():
 # --------------------------------------------------------------------------
 # Reservations (public) + Check-in
 # --------------------------------------------------------------------------
+@api.post("/reservations/identity/start", response_model=ReservationIdentityStartOut)
+async def public_start_reservation_identity(body: ReservationIdentityStartIn):
+    return ReservationIdentityStartOut(**await create_reservation_identity_session(body))
+
 @api.post("/reservations", response_model=ReservationOut)
 async def public_create_reservation(body: ReservationCreateIn):
     """Public endpoint — guest can reserve without password. Returns access_code."""
     email = body.customer_email.lower()
     ci, co = validate_stay_dates(body.check_in_date, body.check_out_date)
+    capacity = int(body.capacity or 1)
+    if capacity < 1 or capacity > 4:
+        raise HTTPException(400, "Kişi sayısı 1-4 arasında olmalı")
     # If user already exists (already checked in), block to avoid duplicates
     existing_user = await db.users.find_one({"email": email}, {"_id": 0})
     if existing_user:
@@ -1413,19 +3302,33 @@ async def public_create_reservation(body: ReservationCreateIn):
     existing_pending = await db.reservations.find_one({"customer_email": email, "status": "pending"}, {"_id": 0})
     if existing_pending:
         raise HTTPException(409, "Bu e-posta için bekleyen bir rezervasyon zaten var. Lütfen mevcut rezervasyon kodunuzu kullanın.")
-    code = await unique_access_code()
+    room = await resolve_room_for_reservation(DEFAULT_HOTEL_ID, ci, co, capacity, body.room_id, body.room_number)
+    if not room:
+        raise HTTPException(400, "Lütfen uygun bir oda seçin")
+    room_snapshot = room_reservation_snapshot(room, ci, co)
+    identity_requested = bool(body.identity_verification_requested)
+    identity_members = normalize_reservation_identity_members(body.identity_members, body.customer_name, capacity) if identity_requested else []
+    code = "" if identity_requested else await unique_access_code()
     doc = {
         "id": str(uuid.uuid4()),
         "customer_name": body.customer_name.strip(),
         "customer_email": email,
         "customer_phone": body.customer_phone.strip(),
-        "room_number": (body.room_number or None),
+        "capacity": capacity,
+        **room_snapshot,
         "check_in_date": ci,
         "check_out_date": co,
         "hotel_id": DEFAULT_HOTEL_ID,
         "hotelId": DEFAULT_HOTEL_ID,
         "payment_status": body.payment_status,
         "guest_type": body.guest_type,
+        "identity_verification_requested": identity_requested,
+        "identity_status": "waiting_for_verification" if identity_requested else "not_required",
+        "identity_members": identity_members,
+        "identity_failure_reason": None,
+        "encrypted_entry_code": None,
+        "entry_code_hash": None,
+        "entry_code_expires_at": None,
         "access_code": code,
         "status": "pending",
         "user_id": None,
@@ -1434,6 +3337,17 @@ async def public_create_reservation(body: ReservationCreateIn):
         "updated_at": now_iso(),
     }
     await db.reservations.insert_one(doc.copy())
+    if identity_requested:
+        if body.identity_session_id:
+            doc["identity_members"] = await attach_identity_session_to_reservation(body.identity_session_id, doc)
+        else:
+            doc["identity_members"] = await create_reservation_identity_records(doc)
+        await create_identity_alert(
+            DEFAULT_HOTEL_ID,
+            doc["id"],
+            "Rezervasyon kimlik doğrulaması bekliyor",
+            f"{doc['customer_name']} için {len(identity_members)} kişi kimlik doğrulaması başlatıldı.",
+        )
     sent = await send_reservation_email(doc)
     if sent:
         await db.reservations.update_one({"id": doc["id"]}, {"$set": {"email_sent": True}})
@@ -1448,9 +3362,21 @@ async def public_checkin(body: CheckinIn):
     validate_password(body.new_password)
     r = await db.reservations.find_one({"customer_email": email, "access_code": code}, {"_id": 0})
     if not r:
+        r = await db.reservations.find_one({"customer_email": email, "entry_code_hash": identity_fingerprint(code)}, {"_id": 0})
+    if not r:
         raise HTTPException(401, "E-posta veya rezervasyon kodu hatalı")
     if r["status"] not in ("pending", "checked_in"):
         raise HTTPException(400, "Rezervasyon aktif değil")
+    if r.get("identity_verification_requested") and public_reservation_identity_status(r.get("identity_status"), True) != "fully_verified":
+        raise HTTPException(403, "Kimlik doğrulaması tamamlanmadan otele giriş kodu kullanılamaz")
+    if r.get("entry_code_expires_at"):
+        try:
+            if datetime.fromisoformat(r["entry_code_expires_at"]) < datetime.now(timezone.utc):
+                raise HTTPException(403, "Otel giriş kodunun süresi dolmuş")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
     # If a user was already created for this reservation, update password; else create
     user = None
     if r.get("user_id"):
@@ -1485,12 +3411,6 @@ async def public_checkin(body: CheckinIn):
         {"id": r["id"]},
         {"$set": {"status": "checked_in", "user_id": user["id"], "updated_at": now_iso()}},
     )
-    # Mark room occupied
-    if r.get("room_number"):
-        await db.rooms.update_one(
-            room_number_scope(r["room_number"], r.get("hotelId") or r.get("hotel_id") or DEFAULT_HOTEL_ID),
-            {"$set": {"status": "occupied"}},
-        )
     return AuthOut(token=make_token(user["id"]), user=public_user(user))
 
 # --------------------------------------------------------------------------
@@ -1507,21 +3427,36 @@ async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(g
     require_roles(u, "hotel_manager")
     email = body.customer_email.lower()
     ci, co = validate_stay_dates(body.check_in_date, body.check_out_date)
+    capacity = int(body.capacity or 1)
+    if capacity < 1 or capacity > 4:
+        raise HTTPException(400, "Kişi sayısı 1-4 arasında olmalı")
     if body.status != "pending":
         raise HTTPException(400, "Yeni rezervasyon beklemede durumuyla oluşturulmalı")
-    code = await unique_access_code()
+    room = await resolve_room_for_reservation(user_hotel_id(u), ci, co, capacity, body.room_id, body.room_number)
+    room_snapshot = room_reservation_snapshot(room, ci, co)
+    identity_requested = bool(body.identity_verification_requested)
+    identity_members = normalize_reservation_identity_members(body.identity_members, body.customer_name, capacity) if identity_requested else []
+    code = "" if identity_requested else await unique_access_code()
     doc = {
         "id": str(uuid.uuid4()),
         "customer_name": body.customer_name.strip(),
         "customer_email": email,
         "customer_phone": body.customer_phone.strip(),
-        "room_number": body.room_number or None,
+        "capacity": capacity,
+        **room_snapshot,
         "check_in_date": ci,
         "check_out_date": co,
         "hotel_id": user_hotel_id(u),
         "hotelId": user_hotel_id(u),
         "payment_status": body.payment_status,
         "guest_type": body.guest_type,
+        "identity_verification_requested": identity_requested,
+        "identity_status": "waiting_for_verification" if identity_requested else "not_required",
+        "identity_members": identity_members,
+        "identity_failure_reason": None,
+        "encrypted_entry_code": None,
+        "entry_code_hash": None,
+        "entry_code_expires_at": None,
         "access_code": code,
         "status": body.status,
         "user_id": None,
@@ -1530,6 +3465,17 @@ async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(g
         "updated_at": now_iso(),
     }
     await db.reservations.insert_one(doc.copy())
+    if identity_requested:
+        if body.identity_session_id:
+            doc["identity_members"] = await attach_identity_session_to_reservation(body.identity_session_id, doc)
+        else:
+            doc["identity_members"] = await create_reservation_identity_records(doc, u["id"])
+        await create_identity_alert(
+            user_hotel_id(u),
+            doc["id"],
+            "Rezervasyon kimlik doğrulaması bekliyor",
+            f"{doc['customer_name']} için {len(identity_members)} kişi kimlik doğrulaması başlatıldı.",
+        )
     sent = await send_reservation_email(doc)
     if sent:
         await db.reservations.update_one({"id": doc["id"]}, {"$set": {"email_sent": True}})
@@ -1537,6 +3483,7 @@ async def admin_create_reservation(body: AdminReservationIn, u: dict = Depends(g
     return public_reservation(doc)
 
 class AssignRoomIn(BaseModel):
+    room_id: Optional[str] = None
     room_number: str
 
 @api.post("/admin/reservations/{rid}/assign-room", response_model=ReservationOut)
@@ -1545,8 +3492,18 @@ async def admin_assign_room(rid: str, body: AssignRoomIn, u: dict = Depends(get_
     r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
     if not r:
         raise HTTPException(404, "Rezervasyon bulunamadı")
+    room = await resolve_room_for_reservation(
+        user_hotel_id(u),
+        r.get("check_in_date"),
+        r.get("check_out_date"),
+        int(r.get("capacity") or 1),
+        body.room_id,
+        body.room_number,
+        exclude_reservation_id=rid,
+    )
+    update = {**room_reservation_snapshot(room, r.get("check_in_date"), r.get("check_out_date")), "updated_at": now_iso()}
     await db.reservations.update_one(
-        with_hotel_scope(u, {"id": rid}), {"$set": {"room_number": body.room_number, "updated_at": now_iso()}},
+        with_hotel_scope(u, {"id": rid}), {"$set": update},
     )
     r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
     return public_reservation(r)
@@ -1554,17 +3511,33 @@ async def admin_assign_room(rid: str, body: AssignRoomIn, u: dict = Depends(get_
 @api.patch("/admin/reservations/{rid}", response_model=ReservationOut)
 async def admin_update_reservation(rid: str, body: AdminReservationUpdateIn, u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
+    current = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not current:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
     update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
-    if body.check_in_date or body.check_out_date:
-        current = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
-        if not current:
-            raise HTTPException(404, "Rezervasyon bulunamadı")
+    if "capacity" in update:
+        cap = int(update["capacity"])
+        if cap < 1 or cap > 4:
+            raise HTTPException(400, "Kişi sayısı 1-4 arasında olmalı")
+        update["capacity"] = cap
+    if body.check_in_date or body.check_out_date or body.room_id or body.room_number or body.capacity:
         ci, co = validate_stay_dates(
             body.check_in_date or current.get("check_in_date"),
             body.check_out_date or current.get("check_out_date"),
         )
         update["check_in_date"] = ci
         update["check_out_date"] = co
+        capacity = int(update.get("capacity") or current.get("capacity") or 1)
+        room = await resolve_room_for_reservation(
+            user_hotel_id(u),
+            ci,
+            co,
+            capacity,
+            body.room_id or current.get("room_id"),
+            body.room_number or current.get("room_number"),
+            exclude_reservation_id=rid,
+        )
+        update.update(room_reservation_snapshot(room, ci, co))
     if update:
         update["updated_at"] = now_iso()
         await db.reservations.update_one(with_hotel_scope(u, {"id": rid}), {"$set": update})
@@ -1583,14 +3556,63 @@ async def admin_approve_checkin(rid: str, u: dict = Depends(get_current_user)):
         raise HTTPException(404, "Rezervasyon bulunamadı")
     if r["status"] == "completed":
         raise HTTPException(400, "Tamamlanmış rezervasyon")
+    if r.get("identity_verification_requested") and public_reservation_identity_status(r.get("identity_status"), True) != "fully_verified":
+        raise HTTPException(403, "Kimlik doğrulaması onaylanmadan check-in yapılamaz")
     await db.reservations.update_one(
         with_hotel_scope(u, {"id": rid}), {"$set": {"status": "checked_in", "updated_at": now_iso()}},
     )
-    if r.get("room_number"):
-        await db.rooms.update_one(
-            with_hotel_scope(u, {"room_number": r["room_number"]}),
-            {"$set": {"status": "occupied"}},
-        )
+    r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    return public_reservation(r)
+
+@api.post("/admin/reservations/{rid}/identity/approve", response_model=ReservationOut)
+async def admin_approve_reservation_identity(rid: str, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    verifications = await db.identity_verifications.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+    if not verifications:
+        await create_reservation_identity_records(r, u["id"])
+        verifications = await db.identity_verifications.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+    for verification in verifications:
+        await identity_decision(verification["id"], u, "verified_by_hotel", "reservation.identity.approve", "Reservation manual approval")
+    r = await sync_reservation_identity_status(rid) or r
+    await db.reservations.update_one(with_hotel_scope(u, {"id": rid}), {"$set": {"identity_failure_reason": None}})
+    await create_identity_alert(
+        user_hotel_id(u),
+        rid,
+        "Kimlik doğrulama başarılı",
+        f"{r.get('customer_name')} rezervasyonu için giriş kodu aktif edildi.",
+        "success",
+    )
+    r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    sent = await send_reservation_email(r)
+    if sent:
+        await db.reservations.update_one(with_hotel_scope(u, {"id": rid}), {"$set": {"email_sent": True}})
+        r["email_sent"] = True
+    return public_reservation(r)
+
+@api.post("/admin/reservations/{rid}/identity/reject", response_model=ReservationOut)
+async def admin_reject_reservation_identity(rid: str, body: IdentityDecisionIn, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Rezervasyon bulunamadı")
+    reason = (body.note or "Kimlik doğrulama başarısız").strip()
+    verifications = await db.identity_verifications.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+    if not verifications:
+        await create_reservation_identity_records(r, u["id"])
+        verifications = await db.identity_verifications.find({"reservation_id": rid}, {"_id": 0}).to_list(100)
+    for verification in verifications:
+        await identity_decision(verification["id"], u, "rejected", "reservation.identity.reject", reason)
+    await db.reservations.update_one(with_hotel_scope(u, {"id": rid}), {"$set": {"identity_status": "verification_failed", "identity_failure_reason": reason, "access_code": "", "updated_at": now_iso()}})
+    await create_identity_alert(
+        user_hotel_id(u),
+        rid,
+        "Kimlik doğrulama başarısız",
+        f"{r.get('customer_name')} rezervasyonu: {reason}",
+        "danger",
+    )
     r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
     return public_reservation(r)
 
@@ -1605,11 +3627,6 @@ async def admin_complete_reservation(rid: str, u: dict = Depends(get_current_use
     await db.reservations.update_one(
         with_hotel_scope(u, {"id": rid}), {"$set": {"status": "completed", "updated_at": now_iso()}},
     )
-    if r.get("room_number"):
-        await db.rooms.update_one(
-            with_hotel_scope(u, {"room_number": r["room_number"]}),
-            {"$set": {"status": "available"}},
-        )
     r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
     return public_reservation(r)
 
@@ -1622,48 +3639,124 @@ async def admin_cancel_reservation(rid: str, u: dict = Depends(get_current_user)
     await db.reservations.update_one(
         with_hotel_scope(u, {"id": rid}), {"$set": {"status": "cancelled", "updated_at": now_iso()}},
     )
-    if r.get("room_number"):
-        await db.rooms.update_one(
-            with_hotel_scope(u, {"room_number": r["room_number"]}),
-            {"$set": {"status": "available"}},
-        )
     r = await db.reservations.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
     return public_reservation(r)
 
 @api.get("/admin/rooms", response_model=List[RoomOut])
 async def admin_list_rooms(u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
-    docs = await db.rooms.find(with_hotel_scope(u), {"_id": 0}).sort("room_number", 1).to_list(500)
-    return [public_room(d) for d in docs]
+    docs = await db.rooms.find(with_hotel_scope(u), {"_id": 0}).sort([("floor", 1), ("room_number", 1)]).to_list(1000)
+    return [await public_room(d) for d in docs]
 
 @api.post("/admin/rooms", response_model=RoomOut)
 async def admin_create_room(body: RoomIn, u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
-    rn = body.room_number.strip()
-    if not rn:
-        raise HTTPException(400, "Oda numarası gerekli")
+    payload = normalize_room_payload(body)
+    rn = payload["room_number"]
     existing = await db.rooms.find_one(with_hotel_scope(u, {"room_number": rn}))
     if existing:
         raise HTTPException(409, "Bu oda numarası zaten kayıtlı")
     doc = {
         "id": str(uuid.uuid4()),
-        "room_number": rn,
-        "type": body.type or "Standard",
+        **payload,
         "status": "available",
         "hotel_id": user_hotel_id(u),
         "hotelId": user_hotel_id(u),
         "created_at": now_iso(),
+        "updated_at": now_iso(),
     }
     await db.rooms.insert_one(doc.copy())
-    return public_room(doc)
+    return await public_room(doc)
+
+@api.patch("/admin/rooms/{rid}", response_model=RoomOut)
+async def admin_update_room(rid: str, body: RoomUpdateIn, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    current = await db.rooms.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not current:
+        raise HTTPException(404, "Oda bulunamadı")
+    update = normalize_room_payload(body, current)
+    new_number = update.get("room_number")
+    if new_number and new_number != current.get("room_number"):
+        existing = await db.rooms.find_one(with_hotel_scope(u, {"room_number": new_number, "id": {"$ne": rid}}))
+        if existing:
+            raise HTTPException(409, "Bu oda numarası zaten kayıtlı")
+    if update:
+        update["updated_at"] = now_iso()
+        await db.rooms.update_one(with_hotel_scope(u, {"id": rid}), {"$set": update})
+        if new_number and new_number != current.get("room_number"):
+            await db.reservations.update_many(
+                with_hotel_scope(u, {"room_id": rid}),
+                {"$set": {"room_number": new_number, "updated_at": now_iso()}},
+            )
+            await db.users.update_many(
+                with_hotel_scope(u, {"room_no": current.get("room_number")}),
+                {"$set": {"room_no": new_number}},
+            )
+    room = await db.rooms.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    return await public_room(room)
+
+@api.get("/admin/rooms/available", response_model=List[RoomOut])
+async def admin_available_rooms(
+    check_in_date: str = Query(...),
+    check_out_date: str = Query(...),
+    capacity: int = Query(1, ge=1, le=4),
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "hotel_manager")
+    ci, co = validate_stay_dates(check_in_date, check_out_date)
+    rooms = await find_available_rooms(ci, co, capacity, user_hotel_id(u))
+    return [await public_room(r) for r in rooms]
+
+@api.get("/admin/rooms/{rid}/status", response_model=RoomOut)
+async def admin_room_status(rid: str, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    room = await db.rooms.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not room:
+        raise HTTPException(404, "Oda bulunamadı")
+    return await public_room(room)
 
 @api.delete("/admin/rooms/{rid}")
 async def admin_delete_room(rid: str, u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
+    room = await db.rooms.find_one(with_hotel_scope(u, {"id": rid}), {"_id": 0})
+    if not room:
+        raise HTTPException(404, "Oda bulunamadı")
+    active = await active_room_reservation(room, "0001-01-01", "9999-12-31")
+    if active:
+        raise HTTPException(409, "Aktif rezervasyonu olan oda silinemez")
     res = await db.rooms.delete_one(with_hotel_scope(u, {"id": rid}))
     if res.deleted_count == 0:
         raise HTTPException(404, "Oda bulunamadı")
     return {"ok": True}
+
+@api.get("/rooms/available", response_model=List[RoomOut])
+async def public_available_rooms(
+    check_in_date: str = Query(...),
+    check_out_date: str = Query(...),
+    capacity: int = Query(1, ge=1, le=4),
+):
+    ci, co = validate_stay_dates(check_in_date, check_out_date)
+    rooms = await find_available_rooms(ci, co, capacity, DEFAULT_HOTEL_ID)
+    return [await public_room(r) for r in rooms]
+
+@api.get("/rooms/{room_id}/price", response_model=RoomPriceOut)
+async def public_room_price(room_id: str, check_in_date: str = Query(...), check_out_date: str = Query(...)):
+    ci, co = validate_stay_dates(check_in_date, check_out_date)
+    room = await db.rooms.find_one(room_base_filter(DEFAULT_HOTEL_ID, {"id": room_id}), {"_id": 0})
+    if not room:
+        raise HTTPException(404, "Oda bulunamadı")
+    nights = nights_between(ci, co)
+    price = float(room.get("price_per_night") or 0)
+    room_type = room_type_value(room)
+    return RoomPriceOut(
+        room_id=room["id"],
+        room_number=room["room_number"],
+        room_name=room.get("room_name"),
+        room_type=room_type,
+        price_per_night=price,
+        total_nights=nights,
+        total_price=price * nights,
+    )
 
 @api.get("/reservations/me", response_model=List[ReservationOut])
 async def guest_my_reservations(u: dict = Depends(get_current_user)):
@@ -1680,22 +3773,22 @@ async def guest_my_room(u: dict = Depends(get_current_user)):
     if not u.get("room_no"):
         return None
     room = await db.rooms.find_one(with_hotel_scope(u, {"room_number": u["room_no"]}), {"_id": 0})
-    return public_room(room) if room else None
+    return await public_room(room) if room else None
 
 @api.get("/staff/rooms", response_model=List[RoomOut])
 async def staff_rooms(u: dict = Depends(get_current_user)):
     require_roles(u, "staff")
-    docs = await db.rooms.find(with_hotel_scope(u), {"_id": 0}).sort("room_number", 1).to_list(500)
-    return [public_room(d) for d in docs]
+    docs = await db.rooms.find(with_hotel_scope(u), {"_id": 0}).sort([("floor", 1), ("room_number", 1)]).to_list(1000)
+    return [await public_room(d) for d in docs]
 
 @api.patch("/staff/rooms/{room_id}/status", response_model=RoomOut)
 async def staff_update_room_status(room_id: str, body: RoomStatusIn, u: dict = Depends(get_current_user)):
     require_roles(u, "staff")
-    await db.rooms.update_one(with_hotel_scope(u, {"id": room_id}), {"$set": {"status": body.status}})
+    await db.rooms.update_one(with_hotel_scope(u, {"id": room_id}), {"$set": {"operational_status": body.status, "updated_at": now_iso()}})
     room = await db.rooms.find_one(with_hotel_scope(u, {"id": room_id}), {"_id": 0})
     if not room:
         raise HTTPException(404, "Oda bulunamadı")
-    return public_room(room)
+    return await public_room(room)
 
 @api.get("/announcements")
 async def guest_announcements(u: dict = Depends(get_current_user)):
@@ -1852,10 +3945,13 @@ async def system_set_account_active(user_id: str, body: AccountDisableIn, u: dic
     require_roles(u, "system_admin")
     if user_id == u["id"]:
         raise HTTPException(400, "Kendi hesabınızı devre dışı bırakamazsınız")
-    await db.users.update_one({"id": user_id}, {"$set": {"active": body.active}})
     target = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not target:
         raise HTTPException(404, "Kullanıcı bulunamadı")
+    if body.active and role_of(target) == "staff" and target.get("identity_status") and target.get("identity_status") not in {"verified_by_hotel", "approved", "active_employee"}:
+        raise HTTPException(403, "Kimlik doğrulaması onaylanmadan çalışan aktif yapılamaz")
+    await db.users.update_one({"id": user_id}, {"$set": {"active": body.active}})
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
     return public_admin_user(target)
 
 @api.get("/system/stats")
@@ -1928,6 +4024,47 @@ async def manager_update_hotel(body: HotelUpdateIn, u: dict = Depends(get_curren
         raise HTTPException(404, "Otel bulunamadı")
     return public_hotel(h)
 
+@api.get("/manager/ai-knowledge", response_model=HotelAiKnowledgeOut)
+async def manager_get_ai_knowledge(u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    return public_ai_knowledge(await get_ai_knowledge_doc(user_hotel_id(u)))
+
+@api.put("/manager/ai-knowledge", response_model=HotelAiKnowledgeOut)
+async def manager_save_ai_knowledge(body: HotelAiKnowledgeUpdateIn, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    hotel_id = user_hotel_id(u)
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    doc = normalize_ai_knowledge_payload(body.model_dump(), hotel_id, u.get("id") or u.get("email"))
+    await db.hotel_ai_knowledge.update_one(
+        {"hotel_id": hotel_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    return public_ai_knowledge(doc)
+
+@api.delete("/manager/ai-knowledge")
+async def manager_delete_ai_knowledge(u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    hotel_id = user_hotel_id(u)
+    await db.hotel_ai_knowledge.delete_many({"$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]})
+    return {"ok": True}
+
+@api.get("/staff/ai-knowledge", response_model=HotelAiKnowledgeOut)
+async def staff_get_ai_knowledge(u: dict = Depends(get_current_user)):
+    require_roles(u, "staff")
+    return public_ai_knowledge(await get_ai_knowledge_doc(user_hotel_id(u)))
+
+@api.get("/system/ai-knowledge", response_model=HotelAiKnowledgeOut)
+async def system_get_ai_knowledge(hotel_id: str = Query(...), u: dict = Depends(get_current_user)):
+    require_roles(u, "system_admin")
+    hotel_id = hotel_id.strip()
+    if not hotel_id:
+        raise HTTPException(400, "hotel_id gerekli")
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    return public_ai_knowledge(await get_ai_knowledge_doc(hotel_id))
+
 @api.get("/manager/staff", response_model=List[UserAdminOut])
 async def manager_list_staff(u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
@@ -1957,12 +4094,45 @@ async def manager_create_staff(body: StaffCreateIn, u: dict = Depends(get_curren
         "region_city": body.region_city.strip(),
         "hotel_id": user_hotel_id(u),
         "hotelId": user_hotel_id(u),
-        "active": True,
+        "identity_status": "pending_review" if body.start_identity_verification else None,
+        "active": False if body.start_identity_verification else True,
         "created_at": now_iso(),
     }
     if not all([staff["name"], staff["gender"], staff["nationality"], staff["country"], staff["region_city"]]):
         raise HTTPException(400, "Çalışan profil alanları zorunludur")
     await db.users.insert_one(staff.copy())
+    if body.start_identity_verification:
+        verification = {
+            "id": str(uuid.uuid4()),
+            "user_id": staff["id"],
+            "hotel_id": user_hotel_id(u),
+            "hotelId": user_hotel_id(u),
+            "role": "staff",
+            "subject_type": "employee",
+            "status": "pending_review",
+            "profile": {
+                "first_name": staff["name"].split(" ", 1)[0],
+                "last_name": staff["name"].split(" ", 1)[1] if " " in staff["name"] else "",
+                "birth_date": staff["birth_date"],
+                "nationality": staff["nationality"],
+                "document_type": None,
+                "employee_role": staff["department"],
+            },
+            "encrypted_profile": {},
+            "masked_document_number": None,
+            "created_by": u["id"],
+            "updated_by": u["id"],
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        await db.identity_verifications.insert_one(verification.copy())
+        await append_verification_history({**verification, "status": None}, u, "pending_review", "Çalışan kaydında kimlik doğrulaması başlatıldı")
+        await create_identity_alert(
+            user_hotel_id(u),
+            staff["id"],
+            "Çalışan kimlik doğrulaması başlatıldı",
+            f"{staff['name']} için çalışan kimlik doğrulaması bekliyor.",
+        )
     return public_admin_user(staff)
 
 @api.patch("/manager/staff/{staff_id}", response_model=UserAdminOut)
@@ -1973,6 +4143,11 @@ async def manager_update_staff(staff_id: str, body: StaffUpdateIn, u: dict = Dep
         raise HTTPException(400, "Geçerli bir departman seçin")
     if "birth_date" in update:
         update["birth_date"] = validate_birth_date(update["birth_date"])
+    current_staff = await db.users.find_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"_id": 0})
+    if not current_staff:
+        raise HTTPException(404, "Personel bulunamadı")
+    if update.get("active") is True and current_staff.get("identity_status") and current_staff.get("identity_status") not in {"verified_by_hotel", "approved", "active_employee"}:
+        raise HTTPException(403, "Kimlik doğrulaması onaylanmadan çalışan aktif yapılamaz")
     for key in ("name", "gender", "nationality", "country", "region_city"):
         if key in update:
             update[key] = update[key].strip()
@@ -1981,8 +4156,6 @@ async def manager_update_staff(staff_id: str, body: StaffUpdateIn, u: dict = Dep
     if update:
         await db.users.update_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"$set": update})
     staff = await db.users.find_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"_id": 0})
-    if not staff:
-        raise HTTPException(404, "Personel bulunamadı")
     return public_admin_user(staff)
 
 @api.delete("/manager/staff/{staff_id}")
@@ -2153,6 +4326,52 @@ async def ensure_system_admin() -> None:
         "created_at": now_iso(),
     })
 
+async def migrate_room_fields() -> None:
+    defaults = {
+        "capacity": 2,
+        "price_per_night": 0,
+        "operational_status": "normal",
+        "is_active": True,
+        "description": None,
+        "updated_at": now_iso(),
+    }
+    for key, value in defaults.items():
+        await db.rooms.update_many({key: {"$exists": False}}, {"$set": {key: value}})
+    await db.rooms.update_many({"room_type": {"$exists": False}, "type": {"$exists": True}}, [{"$set": {"room_type": "$type"}}])
+    await db.rooms.update_many({"room_type": {"$exists": False}}, {"$set": {"room_type": "Standard", "type": "Standard"}})
+    await db.rooms.update_many({"type": {"$exists": False}, "room_type": {"$exists": True}}, [{"$set": {"type": "$room_type"}}])
+    await db.rooms.update_many({"status": "out_of_service"}, {"$set": {"operational_status": "maintenance", "status": "maintenance"}})
+
+async def ensure_ai_knowledge_indexes() -> None:
+    await db.hotel_ai_knowledge.update_many(
+        {"hotel_id": {"$exists": True}, "hotelId": {"$exists": False}},
+        [{"$set": {"hotelId": "$hotel_id"}}],
+    )
+    await db.hotel_ai_knowledge.update_many(
+        {"hotelId": {"$exists": True}, "hotel_id": {"$exists": False}},
+        [{"$set": {"hotel_id": "$hotelId"}}],
+    )
+    await db.hotel_ai_knowledge.create_index(
+        "hotel_id",
+        unique=True,
+        background=True,
+        partialFilterExpression={"hotel_id": {"$exists": True}},
+    )
+
+async def ensure_identity_indexes() -> None:
+    await db.identity_verifications.create_index("user_id", unique=True, background=True)
+    await db.identity_verifications.create_index([("hotel_id", 1), ("status", 1)], background=True)
+    await db.identity_verifications.create_index("document_fingerprint", background=True, sparse=True)
+    await db.identity_documents.create_index("verification_id", background=True)
+    await db.identity_documents.create_index("checksum", background=True)
+    await db.identity_documents.create_index("perceptual_hash", background=True, sparse=True)
+    await db.identity_ocr_results.create_index([("verification_id", 1), ("created_at", -1)], background=True)
+    await db.identity_face_results.create_index([("verification_id", 1), ("created_at", -1)], background=True)
+    await db.identity_fraud_analysis.create_index([("verification_id", 1), ("created_at", -1)], background=True)
+    await db.identity_liveness_challenges.create_index([("user_id", 1), ("created_at", -1)], background=True)
+    await db.verification_history.create_index("verification_id", background=True)
+    await db.audit_logs.create_index([("verification_id", 1), ("created_at", -1)], background=True)
+
 async def seed_demo():
     if await db.users.count_documents({}) > 0:
         await db.users.update_many({"role": "admin"}, {"$set": {"role": "hotel_manager"}})
@@ -2160,6 +4379,9 @@ async def seed_demo():
         await db.requests.update_many({"hotel_id": {"$exists": True}, "hotelId": {"$exists": False}}, [{"$set": {"hotelId": "$hotel_id"}}])
         await db.rooms.update_many({"hotel_id": {"$exists": True}, "hotelId": {"$exists": False}}, [{"$set": {"hotelId": "$hotel_id"}}])
         await db.reservations.update_many({"hotel_id": {"$exists": True}, "hotelId": {"$exists": False}}, [{"$set": {"hotelId": "$hotel_id"}}])
+        await migrate_room_fields()
+        await ensure_ai_knowledge_indexes()
+        await ensure_identity_indexes()
         await db.hotels.update_many({"services": {"$exists": False}}, {"$set": {"services": default_services()}})
         if not await db.hotels.find_one({"id": DEFAULT_HOTEL_ID}):
             await db.hotels.insert_one({
@@ -2259,20 +4481,31 @@ async def seed_demo():
 
     # Seed rooms
     rooms_seed = [
-        ("101", "Standard"), ("102", "Standard"), ("103", "Standard"),
-        ("204", "Deluxe"), ("205", "Deluxe"),
-        ("315", "Deluxe"), ("316", "Deluxe"),
-        ("401", "Suite"), ("402", "Suite"),
+        ("101", "Standard", "1", 2, 4500), ("102", "Standard", "1", 2, 4500), ("103", "Family", "1", 4, 6200),
+        ("204", "Deluxe", "2", 2, 5000), ("205", "Deluxe", "2", 2, 5000),
+        ("315", "Deluxe", "3", 3, 5400), ("316", "Family", "3", 4, 6500),
+        ("401", "Suite", "4", 2, 8500), ("402", "VIP", "4", 2, 12000),
     ]
-    for rn, tp in rooms_seed:
+    for rn, tp, floor, capacity, price in rooms_seed:
         # Mark occupied for rooms already assigned to seeded guests
         status_r = "occupied" if rn in ("204", "315") else "available"
         await db.rooms.insert_one({
             "id": str(uuid.uuid4()),
-            "room_number": rn, "type": tp, "status": status_r,
+            "room_number": rn,
+            "room_name": f"{rn} {tp}" if tp != "Standard" else rn,
+            "room_type": tp,
+            "type": tp,
+            "floor": floor,
+            "capacity": capacity,
+            "price_per_night": price,
+            "operational_status": "normal",
+            "status": status_r,
+            "is_active": True,
+            "description": None,
             "hotel_id": DEFAULT_HOTEL_ID,
             "hotelId": DEFAULT_HOTEL_ID,
             "created_at": now_iso(),
+            "updated_at": now_iso(),
         })
 
     # Seed sample pending reservations
@@ -2300,6 +4533,8 @@ async def seed_demo():
             "updated_at": now_iso(),
         })
 
+    await ensure_ai_knowledge_indexes()
+    await ensure_identity_indexes()
     logger.info("Seed complete.")
 
 @app.on_event("startup")

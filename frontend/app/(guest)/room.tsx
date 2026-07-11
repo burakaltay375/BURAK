@@ -14,11 +14,11 @@ const RESERVATION_STATUS_LABEL: Record<ReservationStatus, string> = {
 };
 
 const ROOM_STATUS_LABEL: Record<Room["status"], string> = {
-  available: "Müsait",
+  available: "Boş",
+  reserved: "Rezerve",
   occupied: "Dolu",
   cleaning: "Temizlikte",
   maintenance: "Bakımda",
-  out_of_service: "Kullanım Dışı",
 };
 
 export default function GuestRoom() {
@@ -53,14 +53,16 @@ export default function GuestRoom() {
       </View>
       <View style={s.card}>
         <Text style={s.label}>Oda</Text>
-        <Text style={s.value}>{room ? room.room_number : "Atanmadı"}</Text>
-        {room && <Text style={s.meta}>{room.type} · {ROOM_STATUS_LABEL[room.status]}</Text>}
+        <Text style={s.value}>{room ? (room.room_name || room.room_number) : "Atanmadı"}</Text>
+        {room && <Text style={s.meta}>{room.room_type} · Kat {room.floor || "—"} · {room.capacity} kişi · {ROOM_STATUS_LABEL[room.status]}</Text>}
+        {room && <Text style={s.meta}>₺{Math.round(room.price_per_night).toLocaleString("tr-TR")} / Gece</Text>}
       </View>
       {reservations.map((r) => (
         <View key={r.id} style={s.card} testID={`guest-reservation-${r.id}`}>
           <Text style={s.label}>Rezervasyon</Text>
           <Text style={s.value}>{RESERVATION_STATUS_LABEL[r.status]}</Text>
           <Text style={s.meta}>{formatTrDate(r.check_in_date)} → {formatTrDate(r.check_out_date)}</Text>
+          {r.total_price !== null && r.total_price !== undefined && <Text style={s.meta}>Toplam: ₺{Math.round(r.total_price).toLocaleString("tr-TR")}</Text>}
         </View>
       ))}
     </SafeAreaView>
