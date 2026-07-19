@@ -11,6 +11,24 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+## Admin Connection
+
+Panter AI sends completed quotation, recruitment, and inspection requests to the backend endpoint:
+
+```text
+POST /api/panter/requests
+```
+
+The website reads the backend URL from `NEXT_PUBLIC_API_URL`. Copy `.env.example` to `.env.local` if your backend URL is different.
+
+Admin request management is available at:
+
+```text
+http://localhost:3000/admin
+```
+
+Use an existing backend admin account to sign in.
+
 ## Edit Content
 
 Most replaceable text, navigation labels, services, statistics, references, FAQ items, and contact details live in:

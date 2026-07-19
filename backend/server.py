@@ -210,6 +210,28 @@ VerificationStatus = Literal[
 ]
 FraudRisk = Literal["low", "medium", "high", "unknown"]
 AnalysisStatus = Literal["pending", "completed", "unavailable", "failed"]
+PanterRequestType = Literal["quotation", "recruitment", "inspection"]
+PanterInspectionStatus = Literal[
+    "Pending Inspection",
+    "Scheduled",
+    "Inspector Assigned",
+    "Inspection In Progress",
+    "Inspection Completed",
+    "Report Uploaded",
+    "Cancelled",
+]
+PanterOperationEventType = Literal[
+    "Security Inspection",
+    "Customer Meeting",
+    "Site Survey",
+    "Employee Training",
+    "Internal Meeting",
+    "Equipment Maintenance",
+    "Reminder",
+    "Other",
+]
+PanterOperationEventStatus = Literal["Pending", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]
+PanterOperationPriority = Literal["Low", "Medium", "High", "Urgent"]
 
 # --------------------------------------------------------------------------
 # Models
@@ -568,6 +590,251 @@ class UserAdminOut(BaseModel):
     guest_type: Optional[GuestType] = None
     identity_status: Optional[str] = None
     active: bool = True
+
+
+class PanterAdminRequestIn(BaseModel):
+    type: PanterRequestType
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source: str = "panter-ai"
+
+
+class PanterAdminRequestOut(BaseModel):
+    id: str
+    type: PanterRequestType
+    payload: Dict[str, Any]
+    source: str
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class PanterInspectionStatusIn(BaseModel):
+    status: PanterInspectionStatus
+    notes: Optional[str] = None
+
+
+class PanterAdminRequestUpdateIn(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+
+
+class PanterAppointmentIn(BaseModel):
+    title: str
+    description: Optional[str] = None
+    date: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    event_type: PanterOperationEventType = "Other"
+    priority: PanterOperationPriority = "Medium"
+    status: PanterOperationEventStatus = "Scheduled"
+    assigned_employee_id: Optional[str] = None
+    assigned_employee_name: Optional[str] = None
+    customer: Optional[str] = None
+    project: Optional[str] = None
+    address: Optional[str] = None
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    view_type: Optional[str] = None
+    request_id: Optional[str] = None
+    assigned_to: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PanterCvIn(BaseModel):
+    candidate_name: str
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    file_name: str
+    mime_type: str = "application/pdf"
+    data_uri: str
+    notes: Optional[str] = None
+
+
+class PanterCvUpdateIn(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    interview_at: Optional[str] = None
+    ai_score: Optional[int] = None
+
+
+class PanterInspectorAssignIn(BaseModel):
+    inspector_id: str
+
+
+class PanterReportUploadIn(BaseModel):
+    file_name: str
+    mime_type: str = "application/pdf"
+    data_uri: str
+    notes: Optional[str] = None
+
+
+class PanterAiDocumentIn(BaseModel):
+    title: str
+    content: Optional[str] = None
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    data_uri: Optional[str] = None
+
+
+class PanterAiFeedbackIn(BaseModel):
+    conversation_id: Optional[str] = None
+    rating: Optional[int] = None
+    comment: Optional[str] = None
+
+
+class PanterShiftEmployeeIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    position: Optional[str] = None
+    certificates: List[str] = Field(default_factory=list)
+    armed: bool = False
+    salary: float = 0
+    overtime_cost: float = 0
+    availability: List[str] = Field(default_factory=list)
+    leave_days: List[str] = Field(default_factory=list)
+    weekly_working_hours: float = 0
+    maximum_working_hours: float = 45
+    preferred_shift: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    assigned_projects: List[str] = Field(default_factory=list)
+
+
+class PanterShiftPlanIn(BaseModel):
+    project: str
+    date_range: Dict[str, str]
+    working_hours: Optional[str] = None
+    shift_times: List[Dict[str, Any]]
+    required_number_of_employees: int
+    required_roles: List[str] = Field(default_factory=list)
+    required_certificates: List[str] = Field(default_factory=list)
+    required_armed_guards: int = 0
+    required_unarmed_guards: int = 0
+    labor_rules: Dict[str, Any] = Field(default_factory=dict)
+    employees: List[PanterShiftEmployeeIn]
+
+
+class PanterShiftPlanUpdateIn(BaseModel):
+    status: Optional[str] = None
+    schedule: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+
+
+PanterProjectStatus = Literal["Active", "Passive"]
+PanterProjectShiftDuration = Literal["8 Hour", "12 Hour", "Custom Shift"]
+PanterPostArmedRequirement = Literal["Armed", "Unarmed", "Both"]
+
+
+class PanterSecurityPostIn(BaseModel):
+    id: Optional[str] = None
+    post_name: str
+    required_personnel: int = 0
+    armed_required: bool = False
+    armed_requirement: PanterPostArmedRequirement = "Unarmed"
+    fixed_position: bool = True
+    patrol_duty: bool = False
+
+
+class PanterProjectEmployeeIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    position: str = "Güvenlik Görevlisi"
+    armed: bool = False
+    duty: Optional[str] = None
+    certificates: List[str] = Field(default_factory=list)
+    skills: List[str] = Field(default_factory=list)
+    weekly_working_hours: float = 0
+    maximum_working_hours: float = 45
+    preferred_shift: Optional[str] = None
+
+
+class PanterProjectPersonnelRequirementsIn(BaseModel):
+    total_required_personnel: int = 0
+    required_armed_security_guards: int = 0
+    required_unarmed_security_guards: int = 0
+    required_shift_supervisors: int = 0
+    required_reception_personnel: int = 0
+    required_mobile_patrol_personnel: int = 0
+
+
+class PanterProjectShiftConfigurationIn(BaseModel):
+    number_of_shifts: int = 1
+    morning_shift_start: Optional[str] = None
+    morning_shift_end: Optional[str] = None
+    evening_shift_start: Optional[str] = None
+    evening_shift_end: Optional[str] = None
+    night_shift_start: Optional[str] = None
+    night_shift_end: Optional[str] = None
+    shift_duration: PanterProjectShiftDuration = "8 Hour"
+    custom_shift_hours: Optional[float] = None
+
+
+class PanterProjectIn(BaseModel):
+    project_name: str
+    customer_company_name: str
+    project_code: Optional[str] = None
+    project_start_date: str
+    project_end_date: Optional[str] = None
+    project_status: PanterProjectStatus = "Active"
+    personnel_requirements: PanterProjectPersonnelRequirementsIn
+    shift_configuration: PanterProjectShiftConfigurationIn
+    security_posts: List[PanterSecurityPostIn] = Field(default_factory=list)
+    employees: List[PanterProjectEmployeeIn] = Field(default_factory=list)
+    labor_rules: Dict[str, Any] = Field(default_factory=dict)
+    company_policies: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PanterProjectUpdateIn(BaseModel):
+    project_name: Optional[str] = None
+    customer_company_name: Optional[str] = None
+    project_code: Optional[str] = None
+    project_start_date: Optional[str] = None
+    project_end_date: Optional[str] = None
+    project_status: Optional[PanterProjectStatus] = None
+    personnel_requirements: Optional[PanterProjectPersonnelRequirementsIn] = None
+    shift_configuration: Optional[PanterProjectShiftConfigurationIn] = None
+    security_posts: Optional[List[PanterSecurityPostIn]] = None
+    employees: Optional[List[PanterProjectEmployeeIn]] = None
+    labor_rules: Optional[Dict[str, Any]] = None
+    company_policies: Optional[Dict[str, Any]] = None
+
+
+PanterSupportPriority = Literal["Low", "Medium", "High", "Urgent"]
+PanterSupportArmedRequirement = Literal["Armed", "Unarmed", "Any"]
+PanterSupportStatus = Literal["Draft", "Pending", "Approved", "Rejected", "Completed", "Cancelled"]
+
+
+class PanterSupportRequestIn(BaseModel):
+    destination_project_id: str
+    required_personnel: int = 1
+    armed_requirement: PanterSupportArmedRequirement = "Any"
+    required_position: Optional[str] = None
+    date: str
+    start_time: str
+    end_time: str
+    reason: str
+    priority: PanterSupportPriority = "Medium"
+
+
+class PanterSupportRequestUpdateIn(BaseModel):
+    destination_project_id: Optional[str] = None
+    required_personnel: Optional[int] = None
+    armed_requirement: Optional[PanterSupportArmedRequirement] = None
+    required_position: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    reason: Optional[str] = None
+    priority: Optional[PanterSupportPriority] = None
+    status: Optional[PanterSupportStatus] = None
+
+
+class PanterSupportApprovalIn(BaseModel):
+    employee_ids: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
+class PanterSupportRejectIn(BaseModel):
+    notes: Optional[str] = None
 
 class RoomIn(BaseModel):
     room_number: str
@@ -4267,6 +4534,1479 @@ async def manager_create_announcement(body: AnnouncementIn, u: dict = Depends(ge
     await db.announcements.insert_one(doc.copy())
     return doc
 
+
+# --- Panter Security admin dashboard ---
+def require_panter_admin(u: dict) -> None:
+    require_roles(u, "system_admin", "hotel_manager", "staff")
+
+
+def public_panter_admin_request(doc: dict) -> PanterAdminRequestOut:
+    return PanterAdminRequestOut(
+        id=doc["id"],
+        type=doc["type"],
+        payload=doc.get("payload") or {},
+        source=doc.get("source") or "panter-ai",
+        status=doc.get("status") or "New",
+        created_at=doc["created_at"],
+        updated_at=doc["updated_at"],
+    )
+
+
+def panter_file_bytes(data_uri: str) -> bytes:
+    value = data_uri.split(",", 1)[1] if "," in data_uri else data_uri
+    try:
+        return base64.b64decode(value)
+    except Exception:
+        raise HTTPException(400, "File data is invalid")
+
+
+async def add_panter_inspection_history(request_id: str, action: str, actor: dict, notes: Optional[str] = None) -> None:
+    await db.panter_inspection_history.insert_one({
+        "id": str(uuid.uuid4()),
+        "request_id": request_id,
+        "action": action,
+        "notes": notes,
+        "actor_id": actor.get("id"),
+        "actor_name": actor.get("name"),
+        "actor_role": role_of(actor),
+        "created_at": now_iso(),
+    })
+
+
+def normalize_operation_date(value: Optional[str]) -> str:
+    if value and re.match(r"^\d{4}-\d{2}-\d{2}$", value.strip()):
+        return value.strip()
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def create_panter_operation_event(
+    payload: Dict[str, Any],
+    event_type: PanterOperationEventType,
+    source: str,
+    request_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+) -> dict:
+    title = payload.get("title") or payload.get("projectName") or payload.get("project") or payload.get("company") or event_type
+    assigned_employee_id = payload.get("assigned_employee_id") or payload.get("inspector_id") or payload.get("assigned_to")
+    assigned_employee_name = payload.get("assigned_employee_name") or payload.get("inspector_name")
+    if assigned_employee_id and not assigned_employee_name:
+        employee = await db.users.find_one({"id": assigned_employee_id}, {"_id": 0})
+        assigned_employee_name = (employee or {}).get("name")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": str(title),
+        "description": payload.get("description") or payload.get("reason") or payload.get("notes"),
+        "date": normalize_operation_date(payload.get("date") or payload.get("preferredDate")),
+        "start_time": payload.get("start_time") or payload.get("preferredTime"),
+        "end_time": payload.get("end_time"),
+        "event_type": event_type,
+        "priority": payload.get("priority") or "Medium",
+        "status": payload.get("event_status") or "Pending",
+        "assigned_employee_id": assigned_employee_id,
+        "assigned_employee_name": assigned_employee_name,
+        "customer": payload.get("customer") or payload.get("company") or payload.get("name"),
+        "project": payload.get("project") or payload.get("projectName"),
+        "address": payload.get("address") or payload.get("projectAddress"),
+        "notes": payload.get("notes"),
+        "attachments": payload.get("attachments") or [],
+        "request_id": request_id,
+        "source": source,
+        "created_by": actor_id or source,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.panter_operations_calendar.insert_one(doc.copy())
+    if source == "panter-ai":
+        await db.panter_admin_notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "type": "operations_calendar_event",
+            "title": f"New {event_type} event",
+            "event_id": doc["id"],
+            "request_id": request_id,
+            "read": False,
+            "created_at": now_iso(),
+        })
+    return doc
+
+
+@api.post("/panter/requests", response_model=PanterAdminRequestOut)
+async def create_panter_admin_request(body: PanterAdminRequestIn):
+    payload = dict(body.payload or {})
+    request_type = body.type
+    default_status = {
+        "quotation": "New Quotation",
+        "recruitment": "HR Review",
+        "inspection": "Pending Inspection",
+    }[request_type]
+    if request_type == "inspection":
+        payload.setdefault("status", "Pending Inspection")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "type": request_type,
+        "payload": payload,
+        "source": body.source or "panter-ai",
+        "status": payload.get("status") or default_status,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.panter_admin_requests.insert_one(doc.copy())
+    if request_type == "inspection":
+        await create_panter_operation_event(payload, "Security Inspection", body.source or "panter-ai", doc["id"])
+    logger.info("Panter admin request created: type=%s id=%s", request_type, doc["id"])
+    return public_panter_admin_request(doc)
+
+
+@api.get("/panter/admin/dashboard")
+async def panter_admin_dashboard(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    today = datetime.now(timezone.utc).date().isoformat()
+    inspections_today = await db.panter_admin_requests.count_documents({
+        "type": "inspection",
+        "$or": [
+            {"payload.preferredDate": {"$regex": today}},
+            {"payload.preferredDate": {"$regex": today[8:10]}},
+            {"created_at": {"$regex": f"^{today}"}},
+        ],
+    })
+    pending_inspections = await db.panter_admin_requests.count_documents({"type": "inspection", "status": {"$in": ["Pending Inspection", "Scheduled", "Inspector Assigned"]}})
+    new_cvs = await db.panter_cvs.count_documents({"status": {"$in": ["New", "HR Review", None]}})
+    ai_conversations = len(await db.chat_messages.distinct("session_id"))
+    new_quotations = await db.panter_admin_requests.count_documents({"type": "quotation", "status": {"$in": ["New Quotation", "New"]}})
+    total_requests = await db.panter_admin_requests.count_documents({})
+    hired = await db.panter_cvs.count_documents({"status": "Hired"})
+    rejected = await db.panter_cvs.count_documents({"status": "Rejected"})
+    today_events = await db.panter_operations_calendar.find({"date": today}, {"_id": 0}).sort("start_time", 1).to_list(50)
+    upcoming_query = {"date": {"$gte": today}, "status": {"$nin": ["Completed", "Cancelled"]}}
+    upcoming_events = await db.panter_operations_calendar.find(upcoming_query, {"_id": 0}).sort("date", 1).to_list(50)
+    upcoming_inspections = await db.panter_operations_calendar.find({**upcoming_query, "event_type": "Security Inspection"}, {"_id": 0}).sort("date", 1).to_list(50)
+    upcoming_meetings = await db.panter_operations_calendar.find({**upcoming_query, "event_type": {"$in": ["Customer Meeting", "Internal Meeting"]}}, {"_id": 0}).sort("date", 1).to_list(50)
+    return {
+        "today_inspections": inspections_today,
+        "pending_inspections": pending_inspections,
+        "new_cvs": new_cvs,
+        "ai_conversations": ai_conversations,
+        "new_quotation_requests": new_quotations,
+        "calendar_widgets": {
+            "today_schedule": today_events,
+            "upcoming_events": upcoming_events,
+            "upcoming_inspections": upcoming_inspections,
+            "upcoming_meetings": upcoming_meetings,
+        },
+        "statistics": {
+            "total_requests": total_requests,
+            "total_cvs": await db.panter_cvs.count_documents({}),
+            "hired_candidates": hired,
+            "rejected_candidates": rejected,
+            "appointments": await db.panter_operations_calendar.count_documents({}),
+            "employees": await db.users.count_documents({"role": "staff", "active": {"$ne": False}}),
+            "projects": await db.panter_projects.count_documents({}),
+            "active_projects": await db.panter_projects.count_documents({"project_status": "Active"}),
+        },
+    }
+
+
+@api.get("/panter/admin/requests", response_model=List[PanterAdminRequestOut])
+async def list_panter_admin_requests(
+    request_type: Optional[PanterRequestType] = Query(default=None),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    u: dict = Depends(get_current_user),
+):
+    require_panter_admin(u)
+    q: dict = {}
+    if request_type:
+        q["type"] = request_type
+    if status_filter:
+        q["status"] = status_filter
+    docs = await db.panter_admin_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [public_panter_admin_request(doc) for doc in docs]
+
+
+@api.patch("/panter/admin/requests/{request_id}", response_model=PanterAdminRequestOut)
+async def update_panter_admin_request(request_id: str, body: PanterAdminRequestUpdateIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_admin_requests.find_one({"id": request_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Request not found")
+    payload = dict(doc.get("payload") or {})
+    if body.payload:
+        payload.update(body.payload)
+    if body.notes is not None:
+        payload["admin_notes"] = body.notes
+    update = {"payload": payload, "updated_at": now_iso()}
+    if body.status:
+        update["status"] = body.status
+        payload["status"] = body.status
+    await db.panter_admin_requests.update_one({"id": request_id}, {"$set": update})
+    updated = await db.panter_admin_requests.find_one({"id": request_id}, {"_id": 0})
+    return public_panter_admin_request(updated)
+
+
+@api.get("/panter/admin/cvs")
+async def list_panter_cvs(search: Optional[str] = None, status_filter: Optional[str] = Query(default=None, alias="status"), u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    q: dict = {}
+    if status_filter:
+        q["status"] = status_filter
+    if search:
+        q["$or"] = [
+            {"candidate_name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search, "$options": "i"}},
+        ]
+    return await db.panter_cvs.find(q, {"_id": 0, "data_uri": 0}).sort("created_at", -1).to_list(500)
+
+
+@api.post("/panter/admin/cvs")
+async def upload_panter_cv(body: PanterCvIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "candidate_name": body.candidate_name.strip(),
+        "email": str(body.email) if body.email else None,
+        "phone": body.phone,
+        "file_name": body.file_name,
+        "mime_type": body.mime_type,
+        "data_uri": body.data_uri,
+        "ai_score": min(100, max(0, 40 + (10 if body.email else 0) + (10 if body.phone else 0) + min(40, len(body.data_uri) // 4000))),
+        "status": "New",
+        "notes": body.notes,
+        "created_by": u.get("id"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.panter_cvs.insert_one(doc.copy())
+    return {k: v for k, v in doc.items() if k != "data_uri"}
+
+
+@api.get("/panter/admin/cvs/{cv_id}")
+async def get_panter_cv(cv_id: str, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_cvs.find_one({"id": cv_id}, {"_id": 0, "data_uri": 0})
+    if not doc:
+        raise HTTPException(404, "CV not found")
+    return doc
+
+
+@api.get("/panter/admin/cvs/{cv_id}/download")
+async def download_panter_cv(cv_id: str, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_cvs.find_one({"id": cv_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "CV not found")
+    return Response(
+        panter_file_bytes(doc.get("data_uri") or ""),
+        media_type=doc.get("mime_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{doc.get("file_name") or "cv"}"'},
+    )
+
+
+@api.patch("/panter/admin/cvs/{cv_id}")
+async def update_panter_cv(cv_id: str, body: PanterCvUpdateIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    update["updated_at"] = now_iso()
+    res = await db.panter_cvs.update_one({"id": cv_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "CV not found")
+    return await db.panter_cvs.find_one({"id": cv_id}, {"_id": 0, "data_uri": 0})
+
+
+@api.post("/panter/admin/cvs/{cv_id}/interview")
+async def interview_panter_cv(cv_id: str, body: PanterCvUpdateIn, u: dict = Depends(get_current_user)):
+    body.status = "Interview"
+    return await update_panter_cv(cv_id, body, u)
+
+
+@api.post("/panter/admin/cvs/{cv_id}/reject")
+async def reject_panter_cv(cv_id: str, body: PanterCvUpdateIn, u: dict = Depends(get_current_user)):
+    body.status = "Rejected"
+    return await update_panter_cv(cv_id, body, u)
+
+
+@api.post("/panter/admin/cvs/{cv_id}/hire")
+async def hire_panter_cv(cv_id: str, body: PanterCvUpdateIn, u: dict = Depends(get_current_user)):
+    body.status = "Hired"
+    return await update_panter_cv(cv_id, body, u)
+
+
+@api.get("/panter/admin/appointments")
+async def list_panter_appointments(
+    date: Optional[str] = None,
+    search: Optional[str] = None,
+    event_type: Optional[str] = None,
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    priority: Optional[str] = None,
+    assigned_employee_id: Optional[str] = None,
+    u: dict = Depends(get_current_user),
+):
+    require_panter_admin(u)
+    q: dict = {}
+    if date:
+        q["date"] = date
+    if event_type:
+        q["event_type"] = event_type
+    if status_filter:
+        q["status"] = status_filter
+    if priority:
+        q["priority"] = priority
+    if assigned_employee_id:
+        q["assigned_employee_id"] = assigned_employee_id
+    if search:
+        q["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"description": {"$regex": search, "$options": "i"}},
+            {"customer": {"$regex": search, "$options": "i"}},
+            {"project": {"$regex": search, "$options": "i"}},
+            {"address": {"$regex": search, "$options": "i"}},
+        ]
+    return await db.panter_operations_calendar.find(q, {"_id": 0}).sort([("date", 1), ("start_time", 1)]).to_list(1000)
+
+
+@api.post("/panter/admin/appointments")
+async def create_panter_appointment(body: PanterAppointmentIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    payload = body.model_dump()
+    if payload.get("assigned_employee_id") and not payload.get("assigned_employee_name"):
+        employee = await db.users.find_one({"id": payload["assigned_employee_id"]}, {"_id": 0})
+        payload["assigned_employee_name"] = (employee or {}).get("name")
+    doc = {**payload, "id": str(uuid.uuid4()), "source": "admin-dashboard", "created_by": u.get("id"), "created_at": now_iso(), "updated_at": now_iso()}
+    await db.panter_operations_calendar.insert_one(doc.copy())
+    return doc
+
+
+@api.post("/panter/operation-events")
+async def create_panter_ai_operation_event(body: PanterAppointmentIn):
+    payload = body.model_dump()
+    doc = await create_panter_operation_event(payload, body.event_type, "panter-ai")
+    return doc
+
+
+@api.patch("/panter/admin/appointments/{appointment_id}")
+async def update_panter_appointment(appointment_id: str, body: Dict[str, Any], u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    if body.get("assigned_employee_id") and not body.get("assigned_employee_name"):
+        employee = await db.users.find_one({"id": body["assigned_employee_id"]}, {"_id": 0})
+        body["assigned_employee_name"] = (employee or {}).get("name")
+    body["updated_at"] = now_iso()
+    res = await db.panter_operations_calendar.update_one({"id": appointment_id}, {"$set": body})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Appointment not found")
+    return await db.panter_operations_calendar.find_one({"id": appointment_id}, {"_id": 0})
+
+
+@api.delete("/panter/admin/appointments/{appointment_id}")
+async def delete_panter_appointment(appointment_id: str, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    res = await db.panter_operations_calendar.delete_one({"id": appointment_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Appointment not found")
+    return {"ok": True}
+
+
+# --- AI powered security shift planning ---
+def require_shift_planning_admin(u: dict) -> None:
+    # Existing roles: system_admin is administrator, hotel_manager is used as operations manager.
+    require_roles(u, "system_admin", "hotel_manager")
+
+
+def parse_hhmm(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    if not re.match(r"^\d{2}:\d{2}$", value):
+        raise HTTPException(400, f"Invalid time format: {value}")
+    hours, minutes = [int(part) for part in value.split(":")]
+    if hours > 23 or minutes > 59:
+        raise HTTPException(400, f"Invalid time value: {value}")
+    return hours * 60 + minutes
+
+
+def project_personnel_total(requirements: PanterProjectPersonnelRequirementsIn) -> int:
+    return (
+        requirements.required_armed_security_guards
+        + requirements.required_unarmed_security_guards
+        + requirements.required_shift_supervisors
+        + requirements.required_reception_personnel
+        + requirements.required_mobile_patrol_personnel
+    )
+
+
+def validate_panter_project(body: PanterProjectIn) -> List[str]:
+    warnings: List[str] = []
+    if not body.project_name.strip():
+        raise HTTPException(400, "Project name is required")
+    if not body.customer_company_name.strip():
+        raise HTTPException(400, "Customer / company name is required")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.project_start_date):
+        raise HTTPException(400, "Project start date must be YYYY-MM-DD")
+    if body.project_end_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", body.project_end_date):
+        raise HTTPException(400, "Project end date must be YYYY-MM-DD")
+
+    req = body.personnel_requirements
+    configured_total = project_personnel_total(req)
+    if req.required_armed_security_guards > req.total_required_personnel:
+        raise HTTPException(400, "Required armed personnel exceeds total personnel")
+    if configured_total > req.total_required_personnel:
+        raise HTTPException(400, "Armed + unarmed + other personnel cannot exceed total personnel")
+
+    post_total = sum(max(0, post.required_personnel) for post in body.security_posts)
+    armed_post_total = sum(
+        max(0, post.required_personnel)
+        for post in body.security_posts
+        if post.armed_required or post.armed_requirement in ["Armed", "Both"]
+    )
+    if req.total_required_personnel < post_total:
+        warnings.append("Total required personnel is lower than total personnel assigned to posts.")
+    if post_total > req.total_required_personnel:
+        warnings.append("Required personnel for posts exceeds available personnel.")
+    if armed_post_total > req.required_armed_security_guards:
+        warnings.append("Armed posts require more armed guards than configured.")
+
+    shift = body.shift_configuration
+    if shift.number_of_shifts < 1:
+        raise HTTPException(400, "Number of shifts must be at least 1")
+    shift_pairs = [
+        (shift.morning_shift_start, shift.morning_shift_end, "Morning"),
+        (shift.evening_shift_start, shift.evening_shift_end, "Evening"),
+        (shift.night_shift_start, shift.night_shift_end, "Night"),
+    ][: shift.number_of_shifts]
+    for start, end, name in shift_pairs:
+        if not start or not end:
+            warnings.append(f"{name} shift start and end should be configured.")
+            continue
+        parse_hhmm(start)
+        parse_hhmm(end)
+    if shift.shift_duration == "Custom Shift" and not shift.custom_shift_hours:
+        warnings.append("Custom shift duration is selected but custom hours are empty.")
+
+    if req.total_required_personnel > 0 and post_total < max(1, req.total_required_personnel * 0.5):
+        warnings.append("Panter AI recommends defining more security posts so responsibilities are clearer.")
+    if req.required_shift_supervisors == 0 and req.total_required_personnel >= 8:
+        warnings.append("Panter AI recommends at least one shift supervisor for larger projects.")
+    return warnings
+
+
+def generate_project_code(project_name: str) -> str:
+    prefix = "".join(ch for ch in project_name.upper() if ch.isalnum())[:4] or "PRJ"
+    return f"{prefix}-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
+
+
+def panter_project_ai_recommendations(doc: Dict[str, Any], warnings: List[str]) -> List[Dict[str, str]]:
+    req = doc.get("personnel_requirements") or {}
+    posts = doc.get("security_posts") or []
+    recommendations: List[Dict[str, str]] = []
+    if not posts:
+        recommendations.append({
+            "title": "Güvenlik noktaları önerisi",
+            "description": "Panter AI giriş kapısı, resepsiyon, devriye rotası ve kontrol odası gibi temel postların tanımlanmasını önerir.",
+            "reason": "Post bazlı planlama ileride vardiya oluştururken görev dağılımını daha net ve denetlenebilir yapar.",
+        })
+    if req.get("total_required_personnel", 0) >= 8 and req.get("required_shift_supervisors", 0) == 0:
+        recommendations.append({
+            "title": "Vardiya amiri ekleyin",
+            "description": "Toplam personel yüksek olduğu için her vardiya için en az bir vardiya amiri planlanabilir.",
+            "reason": "Operasyon yönetimi, raporlama ve acil durum koordinasyonu için sorumlu kişi gerekir.",
+        })
+    if req.get("required_mobile_patrol_personnel", 0) == 0 and len(posts) >= 4:
+        recommendations.append({
+            "title": "Mobil devriye değerlendirin",
+            "description": "Çoklu post yapısında mobil devriye personeli eklemek kör noktaları azaltabilir.",
+            "reason": "Sabit postlar alanı tutarken mobil devriye çevre ve ara bölgeleri kontrol eder.",
+        })
+    for warning in warnings:
+        recommendations.append({
+            "title": "Validasyon uyarısı",
+            "description": warning,
+            "reason": "Bu uyarı proje ileride AI vardiya planlayıcıya gönderildiğinde personel eksikliği veya kural ihlali oluşmaması için gösterilir.",
+        })
+    return recommendations
+
+
+def public_panter_project(doc: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+def time_ranges_overlap(start_a: str, end_a: str, start_b: str, end_b: str) -> bool:
+    a_start = parse_hhmm(start_a)
+    a_end = parse_hhmm(end_a)
+    b_start = parse_hhmm(start_b)
+    b_end = parse_hhmm(end_b)
+    if a_start is None or a_end is None or b_start is None or b_end is None:
+        return False
+    if a_end <= a_start:
+        a_end += 24 * 60
+    if b_end <= b_start:
+        b_end += 24 * 60
+    return max(a_start, b_start) < min(a_end, b_end)
+
+
+def support_request_time_hours(request_doc: Dict[str, Any]) -> float:
+    start = parse_hhmm(request_doc.get("start_time"))
+    end = parse_hhmm(request_doc.get("end_time"))
+    if start is None or end is None:
+        return 0
+    if end <= start:
+        end += 24 * 60
+    return round((end - start) / 60, 2)
+
+
+def validate_support_payload(payload: Dict[str, Any]) -> None:
+    if not payload.get("destination_project_id"):
+        raise HTTPException(400, "Destination project is required")
+    if int(payload.get("required_personnel") or 0) < 1:
+        raise HTTPException(400, "Required personnel must be at least 1")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(payload.get("date") or "")):
+        raise HTTPException(400, "Support date must be YYYY-MM-DD")
+    parse_hhmm(payload.get("start_time"))
+    parse_hhmm(payload.get("end_time"))
+    if not str(payload.get("reason") or "").strip():
+        raise HTTPException(400, "Reason for request is required")
+
+
+async def employee_current_project(employee: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    assigned_projects = employee.get("assigned_projects") or []
+    project_ids = [item for item in assigned_projects if isinstance(item, str)]
+    if project_ids:
+        project = await db.panter_projects.find_one({"id": {"$in": project_ids}, "project_status": "Active"}, {"_id": 0})
+        if project:
+            return project
+    plan = await db.panter_shift_plans.find({
+        "status": {"$in": ["Draft", "Approved"]},
+        "input.employees.name": employee.get("name"),
+    }, {"_id": 0}).sort("created_at", -1).to_list(1)
+    if plan:
+        project_name = plan[0].get("project")
+        project = await db.panter_projects.find_one({"project_name": project_name, "project_status": "Active"}, {"_id": 0})
+        if project:
+            return project
+        return {"id": plan[0].get("id"), "project_name": project_name, "project_code": plan[0].get("project"), "personnel_requirements": {"total_required_personnel": 0}}
+    return None
+
+
+async def employee_has_support_conflict(employee_id: str, date: str, start_time: str, end_time: str) -> bool:
+    existing = await db.panter_support_assignments.find({
+        "employee_id": employee_id,
+        "date": date,
+        "status": {"$nin": ["Rejected", "Cancelled"]},
+    }, {"_id": 0}).to_list(100)
+    return any(time_ranges_overlap(start_time, end_time, item.get("start_time") or "", item.get("end_time") or "") for item in existing)
+
+
+async def analyze_support_request(request_doc: Dict[str, Any]) -> Dict[str, Any]:
+    destination = await db.panter_projects.find_one({"id": request_doc["destination_project_id"]}, {"_id": 0})
+    if not destination:
+        raise HTTPException(404, "Destination project not found")
+    employees = await db.users.find({"role": "staff", "active": {"$ne": False}}, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
+    required_position = (request_doc.get("required_position") or "").lower()
+    armed_requirement = request_doc.get("armed_requirement") or "Any"
+    needed = int(request_doc.get("required_personnel") or 1)
+    request_hours = support_request_time_hours(request_doc)
+    destination_id = request_doc["destination_project_id"]
+    recommendations: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    blocking_warnings: List[str] = []
+
+    for employee in employees:
+        reasons: List[str] = []
+        blocks: List[str] = []
+        employee_id = employee.get("id")
+        current_project = await employee_current_project(employee)
+        current_project_id = (current_project or {}).get("id")
+        if current_project_id == destination_id:
+            blocks.append("Employee already belongs to the destination project.")
+        if armed_requirement == "Armed" and not employee.get("armed", False):
+            blocks.append("Employee does not match the armed requirement.")
+        if required_position and required_position not in str(employee.get("position") or employee.get("department") or "").lower():
+            blocks.append("Employee position does not match the required position.")
+        leave_days = set(employee.get("leave_days") or [])
+        if request_doc["date"] in leave_days:
+            blocks.append("Employee is on leave for the selected date.")
+        if employee_id and await employee_has_support_conflict(employee_id, request_doc["date"], request_doc["start_time"], request_doc["end_time"]):
+            blocks.append("Employee already has a support assignment conflict.")
+
+        source_project_name = (current_project or {}).get("project_name") or "Atanmamış"
+        source_total = ((current_project or {}).get("personnel_requirements") or {}).get("total_required_personnel", 0)
+        source_posts = sum((post.get("required_personnel") or 0) for post in ((current_project or {}).get("security_posts") or []))
+        if current_project and source_total and source_total <= source_posts:
+            blocks.append("Transferring this employee may leave the original project understaffed.")
+
+        max_hours = float(employee.get("maximum_working_hours") or 45)
+        weekly_hours = float(employee.get("weekly_working_hours") or 0)
+        overtime_impact = max(0.0, weekly_hours + request_hours - max_hours)
+        if overtime_impact > 0 and ((destination.get("company_policies") or {}).get("overtime_requires_approval") is True):
+            reasons.append("Overtime may require manager approval under configured company policy.")
+
+        if not blocks:
+            qualifications = employee.get("certificates") or employee.get("skills") or []
+            reasons.append("Employee is active, available, and matches the requested support profile.")
+            if current_project:
+                reasons.append("Original project impact is acceptable based on configured project requirements.")
+            recommendations.append({
+                "employee_id": employee_id,
+                "employee_name": employee.get("name"),
+                "current_project_id": current_project_id,
+                "current_project": source_project_name,
+                "position": employee.get("position") or employee.get("department") or "-",
+                "qualification": ", ".join(qualifications) if qualifications else "-",
+                "reason_for_recommendation": " ".join(reasons),
+                "expected_overtime_impact": overtime_impact,
+                "staffing_impact_on_original_project": "No understaffing detected." if current_project else "No active source project detected.",
+                "selected_explanation": "Selected because the employee passes availability, qualification, armed/unarmed, conflict, rest and source staffing checks.",
+            })
+        else:
+            rejected.append({"employee_id": employee_id, "employee_name": employee.get("name"), "reasons": blocks})
+
+    if len(recommendations) < needed:
+        blocking_warnings.append("Not enough eligible employees were found for this support request.")
+    return {
+        "destination_project": destination,
+        "recommendations": recommendations[: max(needed * 3, 10)],
+        "rejected_candidates": rejected[:50],
+        "blocking_warnings": blocking_warnings,
+        "analysis_summary": {
+            "active_projects_checked": await db.panter_projects.count_documents({"project_status": "Active"}),
+            "employees_checked": len(employees),
+            "eligible_employees": len(recommendations),
+            "required_personnel": needed,
+        },
+    }
+
+
+async def audit_support_request(request_id: str, action: str, actor: dict, changes: Optional[Dict[str, Any]] = None) -> None:
+    await db.panter_support_audit.insert_one({
+        "id": str(uuid.uuid4()),
+        "request_id": request_id,
+        "action": action,
+        "actor_id": actor.get("id"),
+        "actor_name": actor.get("name"),
+        "actor_role": role_of(actor),
+        "changes": changes or {},
+        "created_at": now_iso(),
+    })
+
+
+def parse_shift_date_range(date_range: Dict[str, str]) -> List[str]:
+    start_raw = date_range.get("start") or date_range.get("from")
+    end_raw = date_range.get("end") or date_range.get("to") or start_raw
+    if not start_raw:
+        raise HTTPException(400, "Date range start is required")
+    try:
+        start = datetime.strptime(start_raw, "%Y-%m-%d").date()
+        end = datetime.strptime(end_raw, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(400, "Date range must use YYYY-MM-DD")
+    if end < start:
+        raise HTTPException(400, "Date range end cannot be before start")
+    if (end - start).days > 62:
+        raise HTTPException(400, "Shift planning range cannot exceed 62 days")
+    return [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
+
+
+def shift_hours(shift: Dict[str, Any]) -> float:
+    start = str(shift.get("start") or shift.get("start_time") or "00:00")
+    end = str(shift.get("end") or shift.get("end_time") or "00:00")
+    try:
+        start_dt = datetime.strptime(start, "%H:%M")
+        end_dt = datetime.strptime(end, "%H:%M")
+        hours = (end_dt - start_dt).total_seconds() / 3600
+        return hours if hours > 0 else hours + 24
+    except Exception:
+        return float(shift.get("hours") or 8)
+
+
+def employee_is_qualified(employee: Dict[str, Any], body: PanterShiftPlanIn, armed_needed: bool) -> tuple[bool, List[str]]:
+    reasons = []
+    employee_certs = set(employee.get("certificates") or [])
+    employee_skills = set(employee.get("skills") or [])
+    employee_projects = set(employee.get("assigned_projects") or [])
+    for cert in body.required_certificates:
+        if cert not in employee_certs:
+            reasons.append(f"missing_certificate:{cert}")
+    for role in body.required_roles:
+        if role and role not in employee_skills and role != employee.get("position"):
+            reasons.append(f"missing_role:{role}")
+    if armed_needed and not employee.get("armed"):
+        reasons.append("armed_required")
+    if employee_projects and body.project not in employee_projects:
+        reasons.append("project_not_assigned")
+    return not reasons, reasons
+
+
+def build_shift_option(body: PanterShiftPlanIn, option_name: str, weights: Dict[str, float]) -> Dict[str, Any]:
+    days = parse_shift_date_range(body.date_range)
+    employees = [e.model_dump() for e in body.employees]
+    weekly_hours = {employee["name"]: float(employee.get("weekly_working_hours") or 0) for employee in employees}
+    total_hours = {employee["name"]: 0.0 for employee in employees}
+    assigned_today: Dict[str, set] = {day: set() for day in days}
+    schedule: List[Dict[str, Any]] = []
+    violations: List[str] = []
+    staffing_problems: List[str] = []
+    warnings: List[str] = []
+    total_labor_cost = 0.0
+    total_overtime_cost = 0.0
+    required_total = 0
+    assigned_total = 0
+    min_rest_hours = float(body.labor_rules.get("minimum_rest_hours") or 8)
+    last_assignment_end: Dict[str, datetime] = {}
+
+    for day in days:
+        for shift_index, shift in enumerate(body.shift_times):
+            required = int(shift.get("required_number_of_employees") or body.required_number_of_employees)
+            armed_required = int(shift.get("required_armed_guards") or body.required_armed_guards)
+            unarmed_required = int(shift.get("required_unarmed_guards") or body.required_unarmed_guards)
+            if armed_required + unarmed_required > required:
+                required = armed_required + unarmed_required
+            required_total += required
+            hours = shift_hours(shift)
+            shift_start = str(shift.get("start") or shift.get("start_time") or body.working_hours or "00:00").split("-")[0].strip()
+            shift_end = str(shift.get("end") or shift.get("end_time") or "00:00")
+            try:
+                start_dt = datetime.strptime(f"{day} {shift_start}", "%Y-%m-%d %H:%M")
+                end_dt = datetime.strptime(f"{day} {shift_end}", "%Y-%m-%d %H:%M")
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+            except Exception:
+                start_dt = datetime.strptime(f"{day} 00:00", "%Y-%m-%d %H:%M")
+                end_dt = start_dt + timedelta(hours=hours)
+            assignments: List[Dict[str, Any]] = []
+
+            def select_one(armed_needed: bool) -> Optional[Dict[str, Any]]:
+                candidates = []
+                for employee in employees:
+                    name = employee["name"]
+                    qualified, reasons = employee_is_qualified(employee, body, armed_needed)
+                    if not qualified:
+                        warnings.extend([f"{name}: {reason}" for reason in reasons])
+                        continue
+                    if day in (employee.get("leave_days") or []):
+                        warnings.append(f"{name}: leave conflict on {day}")
+                        continue
+                    availability = employee.get("availability") or []
+                    if availability and day not in availability:
+                        warnings.append(f"{name}: unavailable on {day}")
+                        continue
+                    if name in assigned_today[day]:
+                        warnings.append(f"{name}: double shift avoided on {day}")
+                        continue
+                    previous_end = last_assignment_end.get(name)
+                    if previous_end and (start_dt - previous_end).total_seconds() / 3600 < min_rest_hours:
+                        warnings.append(f"{name}: minimum rest conflict on {day}")
+                        continue
+                    max_hours = float(employee.get("maximum_working_hours") or 45)
+                    projected_week = weekly_hours[name] + hours
+                    overtime_hours = max(0.0, projected_week - max_hours)
+                    salary = float(employee.get("salary") or 0)
+                    overtime_cost = float(employee.get("overtime_cost") or salary * 1.5)
+                    preferred_penalty = 0 if not employee.get("preferred_shift") or employee.get("preferred_shift") == shift.get("name") else 1
+                    score = (
+                        weights["cost"] * (salary * hours + overtime_cost * overtime_hours)
+                        + weights["overtime"] * overtime_hours
+                        + weights["balance"] * total_hours[name]
+                        + preferred_penalty
+                    )
+                    candidates.append((score, employee, overtime_hours, salary, overtime_cost))
+                candidates.sort(key=lambda item: item[0])
+                return candidates[0] if candidates else None
+
+            for armed_slot in range(armed_required):
+                choice = select_one(True)
+                if not choice:
+                    violations.append(f"{day} {shift.get('name') or shift_index}: missing armed guard")
+                    staffing_problems.append(f"Missing armed guard for {day} {shift.get('name') or shift_index}")
+                    continue
+                _, employee, overtime_hours, salary, overtime_cost = choice
+                name = employee["name"]
+                assigned_today[day].add(name)
+                weekly_hours[name] += hours
+                total_hours[name] += hours
+                last_assignment_end[name] = end_dt
+                total_labor_cost += salary * hours
+                total_overtime_cost += overtime_cost * overtime_hours
+                assignments.append({"employee_id": employee.get("id"), "name": name, "armed": True, "hours": hours, "overtime_hours": overtime_hours, "role": employee.get("position")})
+
+            for slot in range(max(0, required - len(assignments))):
+                choice = select_one(False)
+                if not choice:
+                    violations.append(f"{day} {shift.get('name') or shift_index}: insufficient staffing")
+                    staffing_problems.append(f"Missing employee for {day} {shift.get('name') or shift_index}")
+                    continue
+                _, employee, overtime_hours, salary, overtime_cost = choice
+                name = employee["name"]
+                assigned_today[day].add(name)
+                weekly_hours[name] += hours
+                total_hours[name] += hours
+                last_assignment_end[name] = end_dt
+                total_labor_cost += salary * hours
+                total_overtime_cost += overtime_cost * overtime_hours
+                assignments.append({"employee_id": employee.get("id"), "name": name, "armed": bool(employee.get("armed")), "hours": hours, "overtime_hours": overtime_hours, "role": employee.get("position")})
+
+            assigned_total += len(assignments)
+            schedule.append({
+                "date": day,
+                "shift": shift.get("name") or f"Shift {shift_index + 1}",
+                "start_time": shift_start,
+                "end_time": shift_end,
+                "required": required,
+                "assignments": assignments,
+            })
+
+    total_working_hours = sum(total_hours.values())
+    overtime_hours = sum(max(0.0, weekly_hours[name] - float(next((e.get("maximum_working_hours") or 45 for e in employees if e["name"] == name), 45))) for name in weekly_hours)
+    coverage = round((assigned_total / required_total) * 100, 2) if required_total else 100
+    balance_values = list(total_hours.values()) or [0]
+    workload_spread = max(balance_values) - min(balance_values)
+    optimization_score = max(0, round(100 - len(violations) * 10 - overtime_hours * 1.5 - workload_spread * 0.5 - max(0, 100 - coverage), 2))
+    employee_schedule = [{"employee": name, "total_hours": hours, "assignments": [row for row in schedule if any(a["name"] == name for a in row["assignments"])]} for name, hours in total_hours.items()]
+    project_schedule = {"project": body.project, "shifts": schedule}
+    return {
+        "name": option_name,
+        "reason": {
+            "Option A": "Generated with lowest labor cost as the strongest optimization weight.",
+            "Option B": "Generated with overtime minimization as the strongest optimization weight.",
+            "Option C": "Generated with balanced workload distribution as the strongest optimization weight.",
+        }[option_name],
+        "weekly_schedule": schedule[:7 * max(1, len(body.shift_times))],
+        "monthly_schedule": schedule,
+        "employee_schedule": employee_schedule,
+        "project_schedule": project_schedule,
+        "daily_shift_assignment": schedule,
+        "analysis": {
+            "total_employees": len(employees),
+            "total_working_hours": round(total_working_hours, 2),
+            "overtime_hours": round(overtime_hours, 2),
+            "estimated_labor_cost": round(total_labor_cost, 2),
+            "estimated_overtime_cost": round(total_overtime_cost, 2),
+            "coverage_percentage": coverage,
+            "rule_violations": sorted(set(violations)),
+            "staffing_problems": sorted(set(staffing_problems)),
+            "optimization_score": optimization_score,
+            "warnings": sorted(set(warnings))[:100],
+        },
+    }
+
+
+async def audit_shift_plan(plan_id: str, action: str, actor: dict, changes: Optional[Dict[str, Any]] = None) -> None:
+    await db.panter_shift_plan_audit.insert_one({
+        "id": str(uuid.uuid4()),
+        "plan_id": plan_id,
+        "action": action,
+        "actor_id": actor.get("id"),
+        "actor_name": actor.get("name"),
+        "actor_role": role_of(actor),
+        "changes": changes or {},
+        "created_at": now_iso(),
+    })
+
+
+@api.get("/panter/admin/projects")
+async def list_panter_projects(
+    search: Optional[str] = None,
+    status: Optional[PanterProjectStatus] = None,
+    u: dict = Depends(get_current_user),
+):
+    require_shift_planning_admin(u)
+    q: Dict[str, Any] = {}
+    if status:
+        q["project_status"] = status
+    if search:
+        q["$or"] = [
+            {"project_name": {"$regex": search, "$options": "i"}},
+            {"customer_company_name": {"$regex": search, "$options": "i"}},
+            {"project_code": {"$regex": search, "$options": "i"}},
+        ]
+    docs = await db.panter_projects.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api.get("/panter/admin/projects/{project_id}")
+async def get_panter_project(project_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    doc = await db.panter_projects.find_one({"id": project_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Project not found")
+    return doc
+
+
+@api.post("/panter/admin/projects")
+async def create_panter_project(body: PanterProjectIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    warnings = validate_panter_project(body)
+    payload = body.model_dump()
+    payload["project_code"] = (payload.get("project_code") or generate_project_code(body.project_name)).strip()
+    payload["security_posts"] = [
+        {**post, "id": post.get("id") or str(uuid.uuid4()), "armed_required": post.get("armed_requirement") in ["Armed", "Both"] or post.get("armed_required", False)}
+        for post in payload.get("security_posts", [])
+    ]
+    payload["employees"] = [
+        {**employee, "id": employee.get("id") or str(uuid.uuid4())}
+        for employee in payload.get("employees", [])
+    ]
+    doc = {
+        **payload,
+        "id": str(uuid.uuid4()),
+        "validation_warnings": warnings,
+        "ai_recommendations": [],
+        "created_by": u.get("id"),
+        "updated_by": u.get("id"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    doc["ai_recommendations"] = panter_project_ai_recommendations(doc, warnings)
+    await db.panter_projects.insert_one(doc.copy())
+    return public_panter_project(doc)
+
+
+@api.patch("/panter/admin/projects/{project_id}")
+async def update_panter_project(project_id: str, body: PanterProjectUpdateIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    existing = await db.panter_projects.find_one({"id": project_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Project not found")
+    merged = {**existing, **body.model_dump(exclude_unset=True)}
+    validation_body = PanterProjectIn(**{
+        "project_name": merged["project_name"],
+        "customer_company_name": merged["customer_company_name"],
+        "project_code": merged.get("project_code"),
+        "project_start_date": merged["project_start_date"],
+        "project_end_date": merged.get("project_end_date"),
+        "project_status": merged.get("project_status", "Active"),
+        "personnel_requirements": merged["personnel_requirements"],
+        "shift_configuration": merged["shift_configuration"],
+        "security_posts": merged.get("security_posts") or [],
+        "employees": merged.get("employees") or [],
+        "labor_rules": merged.get("labor_rules") or {},
+        "company_policies": merged.get("company_policies") or {},
+    })
+    warnings = validate_panter_project(validation_body)
+    update = body.model_dump(exclude_unset=True)
+    if "security_posts" in update and update["security_posts"] is not None:
+        update["security_posts"] = [
+            {**post, "id": post.get("id") or str(uuid.uuid4()), "armed_required": post.get("armed_requirement") in ["Armed", "Both"] or post.get("armed_required", False)}
+            for post in update["security_posts"]
+        ]
+    if "employees" in update and update["employees"] is not None:
+        update["employees"] = [
+            {**employee, "id": employee.get("id") or str(uuid.uuid4())}
+            for employee in update["employees"]
+        ]
+    preview = {**merged, **update, "validation_warnings": warnings}
+    update["validation_warnings"] = warnings
+    update["ai_recommendations"] = panter_project_ai_recommendations(preview, warnings)
+    update["updated_by"] = u.get("id")
+    update["updated_at"] = now_iso()
+    await db.panter_projects.update_one({"id": project_id}, {"$set": update})
+    return await db.panter_projects.find_one({"id": project_id}, {"_id": 0})
+
+
+@api.delete("/panter/admin/projects/{project_id}")
+async def delete_panter_project(project_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    res = await db.panter_projects.delete_one({"id": project_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Project not found")
+    return {"ok": True}
+
+
+@api.post("/panter/admin/projects/assist")
+async def assist_panter_project(body: PanterProjectIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    warnings = validate_panter_project(body)
+    doc = body.model_dump()
+    doc["project_code"] = doc.get("project_code") or generate_project_code(body.project_name)
+    return {
+        "validation_warnings": warnings,
+        "ai_recommendations": panter_project_ai_recommendations(doc, warnings),
+        "suggested_posts": [
+            "Ana Giriş Güvenlik Noktası",
+            "Resepsiyon Karşılama Noktası",
+            "Mobil Devriye Rotası",
+            "Kontrol Odası",
+            "Araç Giriş Kontrol Noktası",
+        ],
+    }
+
+
+@api.get("/panter/admin/support-requests")
+async def list_panter_support_requests(
+    status: Optional[PanterSupportStatus] = None,
+    destination_project_id: Optional[str] = None,
+    u: dict = Depends(get_current_user),
+):
+    require_shift_planning_admin(u)
+    q: Dict[str, Any] = {}
+    if status:
+        q["status"] = status
+    if destination_project_id:
+        q["destination_project_id"] = destination_project_id
+    return await db.panter_support_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@api.post("/panter/admin/support-requests")
+async def create_panter_support_request(body: PanterSupportRequestIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    payload = body.model_dump()
+    validate_support_payload(payload)
+    destination = await db.panter_projects.find_one({"id": payload["destination_project_id"]}, {"_id": 0})
+    if not destination:
+        raise HTTPException(404, "Destination project not found")
+    doc = {
+        **payload,
+        "id": str(uuid.uuid4()),
+        "destination_project_name": destination.get("project_name"),
+        "status": "Pending",
+        "analysis": {},
+        "created_by": u.get("id"),
+        "requested_by": u.get("id"),
+        "requested_by_name": u.get("name"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    doc["analysis"] = await analyze_support_request(doc)
+    await db.panter_support_requests.insert_one(doc.copy())
+    await audit_support_request(doc["id"], "created", u, {"destination_project": destination.get("project_name"), "reason": doc.get("reason")})
+    return public_panter_project(doc)
+
+
+@api.patch("/panter/admin/support-requests/{request_id}")
+async def update_panter_support_request(request_id: str, body: PanterSupportRequestUpdateIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    existing = await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Support request not found")
+    update = body.model_dump(exclude_unset=True)
+    merged = {**existing, **update}
+    validate_support_payload(merged)
+    if update.get("destination_project_id"):
+        destination = await db.panter_projects.find_one({"id": update["destination_project_id"]}, {"_id": 0})
+        if not destination:
+            raise HTTPException(404, "Destination project not found")
+        update["destination_project_name"] = destination.get("project_name")
+    merged = {**existing, **update}
+    update["analysis"] = await analyze_support_request(merged)
+    update["updated_by"] = u.get("id")
+    update["updated_at"] = now_iso()
+    await db.panter_support_requests.update_one({"id": request_id}, {"$set": update})
+    await audit_support_request(request_id, "updated", u, update)
+    return await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@api.post("/panter/admin/support-requests/{request_id}/analyze")
+async def analyze_panter_support_request_endpoint(request_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    request_doc = await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+    if not request_doc:
+        raise HTTPException(404, "Support request not found")
+    analysis = await analyze_support_request(request_doc)
+    await db.panter_support_requests.update_one({"id": request_id}, {"$set": {"analysis": analysis, "updated_at": now_iso()}})
+    await audit_support_request(request_id, "analyzed", u, {"eligible_employees": analysis["analysis_summary"]["eligible_employees"]})
+    return analysis
+
+
+@api.post("/panter/admin/support-requests/{request_id}/approve")
+async def approve_panter_support_request(request_id: str, body: PanterSupportApprovalIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    request_doc = await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+    if not request_doc:
+        raise HTTPException(404, "Support request not found")
+    if not body.employee_ids:
+        raise HTTPException(400, "At least one employee must be selected")
+    analysis = await analyze_support_request(request_doc)
+    if analysis.get("blocking_warnings"):
+        raise HTTPException(400, "; ".join(analysis["blocking_warnings"]))
+    eligible = {item["employee_id"]: item for item in analysis.get("recommendations", [])}
+    if len(body.employee_ids) > int(request_doc.get("required_personnel") or 1):
+        raise HTTPException(400, "Selected employee count exceeds required personnel")
+    for employee_id in body.employee_ids:
+        if employee_id not in eligible:
+            raise HTTPException(400, "Selected employee is not eligible for transfer")
+
+    assignments = []
+    for employee_id in body.employee_ids:
+        recommendation = eligible[employee_id]
+        assignment = {
+            "id": str(uuid.uuid4()),
+            "request_id": request_id,
+            "employee_id": employee_id,
+            "employee_name": recommendation.get("employee_name"),
+            "source_project_id": recommendation.get("current_project_id"),
+            "source_project": recommendation.get("current_project"),
+            "destination_project_id": request_doc.get("destination_project_id"),
+            "destination_project": request_doc.get("destination_project_name"),
+            "date": request_doc.get("date"),
+            "start_time": request_doc.get("start_time"),
+            "end_time": request_doc.get("end_time"),
+            "reason": request_doc.get("reason"),
+            "status": "Approved",
+            "approved_by": u.get("id"),
+            "approved_by_name": u.get("name"),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        assignments.append(assignment)
+        await db.panter_support_assignments.insert_one(assignment.copy())
+        await db.users.update_one({"id": employee_id}, {"$addToSet": {"assigned_projects": request_doc.get("destination_project_id")}})
+        await db.panter_shift_plans.update_many(
+            {"project": {"$in": [recommendation.get("current_project"), request_doc.get("destination_project_name")]}},
+            {"$push": {"support_transfer_adjustments": assignment}, "$set": {"updated_at": now_iso()}},
+        )
+
+    update = {
+        "status": "Approved",
+        "approved_by": u.get("id"),
+        "approved_by_name": u.get("name"),
+        "approved_at": now_iso(),
+        "approved_employee_ids": body.employee_ids,
+        "approval_notes": body.notes,
+        "analysis": analysis,
+        "updated_at": now_iso(),
+    }
+    await db.panter_support_requests.update_one({"id": request_id}, {"$set": update})
+    await audit_support_request(request_id, "approved", u, {"employee_ids": body.employee_ids, "notes": body.notes})
+    return await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@api.post("/panter/admin/support-requests/{request_id}/reject")
+async def reject_panter_support_request(request_id: str, body: PanterSupportRejectIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    res = await db.panter_support_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "Rejected", "rejected_by": u.get("id"), "rejected_by_name": u.get("name"), "rejected_at": now_iso(), "rejection_notes": body.notes, "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Support request not found")
+    await audit_support_request(request_id, "rejected", u, {"notes": body.notes})
+    return await db.panter_support_requests.find_one({"id": request_id}, {"_id": 0})
+
+
+@api.get("/panter/admin/support-assignments")
+async def list_panter_support_assignments(u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    return await db.panter_support_assignments.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@api.get("/panter/admin/support-requests/{request_id}/audit")
+async def list_panter_support_audit(request_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    return await db.panter_support_audit.find({"request_id": request_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.get("/panter/admin/support-stats")
+async def panter_support_stats(u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    requests = await db.panter_support_requests.find({}, {"_id": 0}).to_list(2000)
+    assignments = await db.panter_support_assignments.find({}, {"_id": 0}).to_list(2000)
+    project_counts: Dict[str, int] = {}
+    employee_counts: Dict[str, int] = {}
+    monthly_counts: Dict[str, int] = {}
+    for item in requests:
+        project = item.get("destination_project_name") or item.get("destination_project_id") or "-"
+        project_counts[project] = project_counts.get(project, 0) + 1
+        month = str(item.get("date") or item.get("created_at") or "")[:7] or "unknown"
+        monthly_counts[month] = monthly_counts.get(month, 0) + 1
+    for item in assignments:
+        employee = item.get("employee_name") or item.get("employee_id") or "-"
+        employee_counts[employee] = employee_counts.get(employee, 0) + 1
+    return {
+        "total_support_requests": len(requests),
+        "total_support_assignments": len(assignments),
+        "most_requested_projects": sorted(project_counts.items(), key=lambda row: row[1], reverse=True)[:10],
+        "most_transferred_employees": sorted(employee_counts.items(), key=lambda row: row[1], reverse=True)[:10],
+        "monthly_support_history": sorted(monthly_counts.items()),
+    }
+
+
+@api.post("/panter/admin/shift-plans/generate")
+async def generate_panter_shift_plan(body: PanterShiftPlanIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    options = [
+        build_shift_option(body, "Option A", {"cost": 1.0, "overtime": 0.6, "balance": 0.25}),
+        build_shift_option(body, "Option B", {"cost": 0.5, "overtime": 1.2, "balance": 0.25}),
+        build_shift_option(body, "Option C", {"cost": 0.5, "overtime": 0.6, "balance": 1.0}),
+    ]
+    recommended = max(options, key=lambda option: option["analysis"]["optimization_score"])
+    doc = {
+        "id": str(uuid.uuid4()),
+        "project": body.project,
+        "input": body.model_dump(),
+        "options": options,
+        "recommended_option": recommended["name"],
+        "schedule": recommended,
+        "status": "Draft",
+        "created_by": u.get("id"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.panter_shift_plans.insert_one(doc.copy())
+    await audit_shift_plan(doc["id"], "generated", u, {"recommended_option": recommended["name"]})
+    return doc
+
+
+@api.get("/panter/admin/shift-plans")
+async def list_panter_shift_plans(project: Optional[str] = None, status_filter: Optional[str] = Query(default=None, alias="status"), u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    q: dict = {}
+    if project:
+        q["project"] = {"$regex": project, "$options": "i"}
+    if status_filter:
+        q["status"] = status_filter
+    return await db.panter_shift_plans.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.patch("/panter/admin/shift-plans/{plan_id}")
+async def update_panter_shift_plan(plan_id: str, body: PanterShiftPlanUpdateIn, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    update["updated_at"] = now_iso()
+    res = await db.panter_shift_plans.update_one({"id": plan_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Shift plan not found")
+    await audit_shift_plan(plan_id, "updated", u, update)
+    return await db.panter_shift_plans.find_one({"id": plan_id}, {"_id": 0})
+
+
+@api.post("/panter/admin/shift-plans/{plan_id}/approve")
+async def approve_panter_shift_plan(plan_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    res = await db.panter_shift_plans.update_one({"id": plan_id}, {"$set": {"status": "Approved", "approved_by": u.get("id"), "approved_at": now_iso(), "updated_at": now_iso()}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Shift plan not found")
+    await audit_shift_plan(plan_id, "approved", u)
+    return await db.panter_shift_plans.find_one({"id": plan_id}, {"_id": 0})
+
+
+@api.get("/panter/admin/shift-plans/{plan_id}/audit")
+async def panter_shift_plan_audit(plan_id: str, u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    return await db.panter_shift_plan_audit.find({"plan_id": plan_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.get("/panter/admin/shift-plans/{plan_id}/export")
+async def export_panter_shift_plan(plan_id: str, format: str = Query("excel"), u: dict = Depends(get_current_user)):
+    require_shift_planning_admin(u)
+    plan = await db.panter_shift_plans.find_one({"id": plan_id}, {"_id": 0})
+    if not plan:
+        raise HTTPException(404, "Shift plan not found")
+    rows = ["date,shift,start_time,end_time,employee,role,armed,hours,overtime_hours"]
+    for shift in (plan.get("schedule") or {}).get("daily_shift_assignment") or []:
+        for assignment in shift.get("assignments") or []:
+            rows.append(",".join([
+                str(shift.get("date") or ""),
+                str(shift.get("shift") or ""),
+                str(shift.get("start_time") or ""),
+                str(shift.get("end_time") or ""),
+                str(assignment.get("name") or ""),
+                str(assignment.get("role") or ""),
+                str(assignment.get("armed") or False),
+                str(assignment.get("hours") or 0),
+                str(assignment.get("overtime_hours") or 0),
+            ]))
+    if format == "pdf":
+        summary = (plan.get("schedule") or {}).get("analysis") or {}
+        lines = [
+            f"Panter Shift Plan - {plan.get('project')}",
+            f"Status: {plan.get('status')}",
+            f"Recommended Option: {plan.get('recommended_option')}",
+            f"Total Employees: {summary.get('total_employees', 0)}",
+            f"Total Working Hours: {summary.get('total_working_hours', 0)}",
+            f"Overtime Hours: {summary.get('overtime_hours', 0)}",
+            f"Labor Cost: {summary.get('estimated_labor_cost', 0)}",
+            f"Overtime Cost: {summary.get('estimated_overtime_cost', 0)}",
+            f"Coverage: {summary.get('coverage_percentage', 0)}%",
+            f"Optimization Score: {summary.get('optimization_score', 0)}",
+        ]
+        content = "\n".join([line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines])
+        text_commands = "BT /F1 12 Tf 50 780 Td " + " T* ".join([f"({line})" for line in content.split("\n")]) + " ET"
+        stream = text_commands.encode("latin-1", "replace")
+        objects = [
+            b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+            b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+            b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj",
+            b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
+            b"5 0 obj << /Length " + str(len(stream)).encode() + b" >> stream\n" + stream + b"\nendstream endobj",
+        ]
+        pdf = bytearray(b"%PDF-1.4\n")
+        offsets = []
+        for obj in objects:
+            offsets.append(len(pdf))
+            pdf.extend(obj + b"\n")
+        xref_start = len(pdf)
+        pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+        for offset in offsets:
+            pdf.extend(f"{offset:010d} 00000 n \n".encode())
+        pdf.extend(f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF".encode())
+        return Response(bytes(pdf), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="shift-plan-{plan_id}.pdf"'})
+    return Response("\n".join(rows).encode(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="shift-plan-{plan_id}.csv"'})
+
+
+@api.get("/panter/admin/inspection-requests", response_model=List[PanterAdminRequestOut])
+async def list_panter_inspections(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    docs = await db.panter_admin_requests.find({"type": "inspection"}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [public_panter_admin_request(doc) for doc in docs]
+
+
+@api.post("/panter/admin/inspection-requests", response_model=PanterAdminRequestOut)
+async def create_panter_inspection(body: PanterAdminRequestIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    body.type = "inspection"
+    created = await create_panter_admin_request(body)
+    await add_panter_inspection_history(created.id, "created", u)
+    return created
+
+
+@api.patch("/panter/admin/inspection-requests/{request_id}/status", response_model=PanterAdminRequestOut)
+async def update_panter_inspection_status(request_id: str, body: PanterInspectionStatusIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_admin_requests.find_one({"id": request_id, "type": "inspection"}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Inspection request not found")
+
+    payload = dict(doc.get("payload") or {})
+    payload["status"] = body.status
+    if body.notes:
+        payload["admin_notes"] = body.notes
+    await db.panter_admin_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": body.status, "payload": payload, "updated_at": now_iso()}},
+    )
+    updated = await db.panter_admin_requests.find_one({"id": request_id}, {"_id": 0})
+    await add_panter_inspection_history(request_id, f"status:{body.status}", u, body.notes)
+    return public_panter_admin_request(updated)
+
+
+@api.post("/panter/admin/inspection-requests/{request_id}/assign", response_model=PanterAdminRequestOut)
+async def assign_panter_inspector(request_id: str, body: PanterInspectorAssignIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    inspector = await db.users.find_one({"id": body.inspector_id, "role": "staff"}, {"_id": 0})
+    if not inspector:
+        raise HTTPException(404, "Inspector not found")
+    doc = await db.panter_admin_requests.find_one({"id": request_id, "type": "inspection"}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Inspection request not found")
+    payload = dict(doc.get("payload") or {})
+    payload["inspector_id"] = inspector["id"]
+    payload["inspector_name"] = inspector["name"]
+    await db.panter_admin_requests.update_one({"id": request_id}, {"$set": {"payload": payload, "status": "Inspector Assigned", "updated_at": now_iso()}})
+    await add_panter_inspection_history(request_id, "assigned", u, inspector["name"])
+    updated = await db.panter_admin_requests.find_one({"id": request_id}, {"_id": 0})
+    return public_panter_admin_request(updated)
+
+
+@api.post("/panter/admin/inspection-requests/{request_id}/report", response_model=PanterAdminRequestOut)
+async def upload_panter_inspection_report(request_id: str, body: PanterReportUploadIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_admin_requests.find_one({"id": request_id, "type": "inspection"}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Inspection request not found")
+    report = {**body.model_dump(), "id": str(uuid.uuid4()), "uploaded_by": u.get("id"), "created_at": now_iso()}
+    await db.panter_inspection_reports.insert_one({**report, "request_id": request_id})
+    payload = dict(doc.get("payload") or {})
+    payload["latest_report_id"] = report["id"]
+    await db.panter_admin_requests.update_one({"id": request_id}, {"$set": {"payload": payload, "status": "Report Uploaded", "updated_at": now_iso()}})
+    await add_panter_inspection_history(request_id, "report_uploaded", u, body.notes)
+    updated = await db.panter_admin_requests.find_one({"id": request_id}, {"_id": 0})
+    return public_panter_admin_request(updated)
+
+
+@api.get("/panter/admin/inspection-requests/{request_id}/history")
+async def panter_inspection_history(request_id: str, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    return await db.panter_inspection_history.find({"request_id": request_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.get("/panter/admin/quotations", response_model=List[PanterAdminRequestOut])
+async def list_panter_quotations(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    docs = await db.panter_admin_requests.find({"type": "quotation"}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [public_panter_admin_request(doc) for doc in docs]
+
+
+@api.patch("/panter/admin/quotations/{request_id}", response_model=PanterAdminRequestOut)
+async def update_panter_quotation(request_id: str, body: PanterAdminRequestUpdateIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_admin_requests.find_one({"id": request_id, "type": "quotation"}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Quotation request not found")
+    return await update_panter_admin_request(request_id, body, u)
+
+
+@api.get("/panter/admin/ai/conversations")
+async def list_panter_ai_conversations(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    sessions = await db.chat_messages.distinct("session_id")
+    rows = []
+    for session_id in sessions[:500]:
+        messages = await db.chat_messages.find({"session_id": session_id}, {"_id": 0}).sort("created_at", 1).to_list(100)
+        if messages:
+            rows.append({"session_id": session_id, "messages": messages, "message_count": len(messages), "updated_at": messages[-1].get("created_at")})
+    return sorted(rows, key=lambda row: row.get("updated_at") or "", reverse=True)
+
+
+@api.get("/panter/admin/ai/knowledge")
+async def get_panter_ai_knowledge(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = await db.panter_ai_knowledge.find_one({"id": "default"}, {"_id": 0})
+    return doc or {"id": "default", "content": "", "updated_at": None}
+
+
+@api.put("/panter/admin/ai/knowledge")
+async def save_panter_ai_knowledge(body: Dict[str, Any], u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = {"id": "default", "content": body.get("content") or "", "updated_by": u.get("id"), "updated_at": now_iso()}
+    await db.panter_ai_knowledge.update_one({"id": "default"}, {"$set": doc}, upsert=True)
+    return doc
+
+
+@api.get("/panter/admin/ai/documents")
+async def list_panter_ai_documents(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    return await db.panter_ai_documents.find({}, {"_id": 0, "data_uri": 0}).sort("created_at", -1).to_list(500)
+
+
+@api.post("/panter/admin/ai/documents")
+async def upload_panter_ai_document(body: PanterAiDocumentIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = {**body.model_dump(), "id": str(uuid.uuid4()), "uploaded_by": u.get("id"), "created_at": now_iso(), "updated_at": now_iso()}
+    await db.panter_ai_documents.insert_one(doc.copy())
+    return {k: v for k, v in doc.items() if k != "data_uri"}
+
+
+@api.post("/panter/admin/ai/training")
+async def train_panter_ai(body: Dict[str, Any], u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = {"id": str(uuid.uuid4()), "status": "completed", "input": body, "created_by": u.get("id"), "created_at": now_iso()}
+    await db.panter_ai_training_runs.insert_one(doc.copy())
+    return doc
+
+
+@api.get("/panter/admin/ai/feedback")
+async def list_panter_ai_feedback(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    return await db.panter_ai_feedback.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@api.post("/panter/admin/ai/feedback")
+async def create_panter_ai_feedback(body: PanterAiFeedbackIn, u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    doc = {**body.model_dump(), "id": str(uuid.uuid4()), "created_by": u.get("id"), "created_at": now_iso()}
+    await db.panter_ai_feedback.insert_one(doc.copy())
+    return doc
+
+
+@api.get("/panter/admin/employees")
+async def list_panter_employees(u: dict = Depends(get_current_user)):
+    require_panter_admin(u)
+    docs = await db.users.find({"role": "staff"}, {"_id": 0, "password_hash": 0}).sort("name", 1).to_list(500)
+    return [
+        {
+            **doc,
+            "active_projects": await db.panter_admin_requests.count_documents({"payload.inspector_id": doc.get("id"), "status": {"$nin": ["Inspection Completed", "Cancelled"]}}),
+            "status": "active" if doc.get("active", True) else "inactive",
+            "contact": {"email": doc.get("email"), "phone": doc.get("phone") or doc.get("room_no")},
+        }
+        for doc in docs
+    ]
+
 # --------------------------------------------------------------------------
 # Seed demo data
 # --------------------------------------------------------------------------
@@ -4298,11 +6038,9 @@ async def ensure_system_admin() -> None:
 
     other_admin = await db.users.find_one({"role": "system_admin"}, {"_id": 0})
     if other_admin:
-        logger.info(
-            "System admin already exists with email %s; skipping creation of %s",
-            other_admin.get("email"),
-            email,
-        )
+        set_fields["email"] = email
+        await db.users.update_one({"id": other_admin["id"]}, {"$set": set_fields})
+        logger.info("System admin credentials updated from env for %s", email)
         return
 
     if not SYSTEM_ADMIN_PASSWORD_FROM_ENV:

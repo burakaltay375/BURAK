@@ -1,11 +1,13 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   Building2,
   Camera,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Globe2,
   Mail,
   MapPin,
@@ -54,6 +56,392 @@ const news = [
   "Etkinlik güvenliğinde profesyonel ekip yönetimi",
   "Teknoloji destekli güvenlik operasyonları",
 ];
+
+const heroSlides = [
+  {
+    image:
+      "https://images.unsplash.com/photo-1494412574643-ff11b0a5c1c3?auto=format&fit=crop&w=1600&q=80",
+    label: "Kurumsal operasyon alanları",
+  },
+  {
+    image: "/ozel-guvenlik-egitim.png",
+    label: "Özel güvenlik eğitim ve saha disiplini",
+  },
+  {
+    image: "/ozel-guvenlik-kursu.png",
+    label: "Güvenlik personeli eğitim programları",
+  },
+];
+
+type ChatMessage = {
+  role: "assistant" | "user";
+  text: string;
+};
+
+type ChatMode = "general" | "quotation" | "recruitment" | "inspection" | "operationEvent";
+type AdminRequestType = "quotation" | "recruitment" | "inspection";
+
+type LeadField = {
+  key: string;
+  label: string;
+  prompt: string;
+  optional?: boolean;
+};
+
+const initialPanterMessage =
+  "Merhaba ben Panter. Panter Güvenlik hakkında merak ettiklerinizi cevaplamakla görevliyim. Nasıl yardımcı olabilirim?";
+
+const quotationFields: LeadField[] = [
+  { key: "name", label: "Ad Soyad", prompt: "Teklif talebi oluşturalım. Adınızı ve soyadınızı yazar mısınız?" },
+  { key: "phone", label: "Telefon", prompt: "Telefon numaranızı paylaşır mısınız?" },
+  { key: "email", label: "E-posta", prompt: "E-posta adresinizi yazar mısınız?" },
+  { key: "company", label: "Şirket", prompt: "Şirket adınızı yazabilirsiniz. Şirket yoksa 'geç' yazabilirsiniz.", optional: true },
+  { key: "city", label: "Şehir", prompt: "Hizmet almak istediğiniz şehir hangisi?" },
+  { key: "service", label: "Talep Edilen Hizmet", prompt: "Hangi hizmet için teklif istiyorsunuz? Örneğin tesis güvenliği, VIP koruma, etkinlik güvenliği, CCTV veya alarm sistemi." },
+  { key: "notes", label: "Ek Notlar", prompt: "Eklemek istediğiniz not var mı? Yoksa 'yok' yazabilirsiniz.", optional: true },
+];
+
+const recruitmentFields: LeadField[] = [
+  { key: "cv", label: "CV", prompt: "İş başvurusu için CV dosyanızı PDF/DOCX olarak iletmeniz gerekir. Bu demo sohbet dosyayı okuyamaz; lütfen CV hazır mı, kısaca belirtin." },
+  { key: "name", label: "Ad Soyad", prompt: "Adınızı ve soyadınızı yazar mısınız?" },
+  { key: "phone", label: "Telefon", prompt: "Telefon numaranızı paylaşır mısınız?" },
+  { key: "email", label: "E-posta", prompt: "E-posta adresinizi yazar mısınız?" },
+  { key: "license", label: "Güvenlik Lisansı", prompt: "Özel güvenlik kimlik kartınız / lisansınız var mı?" },
+  { key: "experience", label: "Deneyim", prompt: "Güvenlik alanındaki deneyiminizi kısaca yazar mısınız?" },
+];
+
+const inspectionFields: LeadField[] = [
+  { key: "company", label: "Şirket", prompt: "İnceleme talebi için şirket adınızı paylaşır mısınız?" },
+  { key: "name", label: "Yetkili Kişi", prompt: "Görüşülecek yetkili kişinin adını yazar mısınız?" },
+  { key: "phone", label: "Telefon", prompt: "Telefon numaranızı paylaşır mısınız?" },
+  { key: "email", label: "E-posta", prompt: "E-posta adresinizi yazar mısınız?" },
+  { key: "projectName", label: "Proje Adı", prompt: "İncelenecek projenin adını yazar mısınız?", optional: true },
+  { key: "projectAddress", label: "Proje Adresi", prompt: "Proje adresini paylaşır mısınız?" },
+  { key: "city", label: "Şehir", prompt: "Projenin bulunduğu şehir hangisi?" },
+  { key: "personnelCount", label: "Güvenlik Personeli Sayısı", prompt: "Mevcut veya planlanan güvenlik personeli sayısı kaç?" },
+  { key: "currentServices", label: "Mevcut Güvenlik Hizmetleri", prompt: "Şu anda hangi güvenlik hizmetleri kullanılıyor? Yoksa 'yok' yazabilirsiniz.", optional: true },
+  { key: "facilityType", label: "Tesis Türü", prompt: "Tesis türü nedir? Örneğin fabrika, AVM, site, otel, hastane veya ofis." },
+  { key: "reason", label: "İnceleme Nedeni", prompt: "İnceleme talebinizin nedeni nedir? Örneğin zayıf noktaları bulmak, risk analizi, proje revizyonu veya denetim." },
+  { key: "preferredDate", label: "Tercih Edilen Tarih", prompt: "İnceleme için tercih ettiğiniz tarih nedir?" },
+  { key: "preferredTime", label: "Tercih Edilen Saat", prompt: "İnceleme için tercih ettiğiniz saat nedir?" },
+  { key: "notes", label: "Ek Notlar", prompt: "Eklemek istediğiniz not var mı? Yoksa 'yok' yazabilirsiniz.", optional: true },
+];
+
+const operationEventFields: LeadField[] = [
+  { key: "eventType", label: "Etkinlik Türü", prompt: "Operasyon takvimi için etkinlik türünü belirtir misiniz? Toplantı, eğitim, saha keşfi veya iç toplantı olabilir." },
+  { key: "title", label: "Başlık", prompt: "Takvim etkinliği için kısa bir başlık yazar mısınız?" },
+  { key: "date", label: "Tarih", prompt: "Etkinlik tarihi nedir? Mümkünse YYYY-MM-DD olarak yazın." },
+  { key: "start_time", label: "Başlangıç Saati", prompt: "Başlangıç saatini paylaşır mısınız?" },
+  { key: "end_time", label: "Bitiş Saati", prompt: "Bitiş saatini paylaşır mısınız?", optional: true },
+  { key: "customer", label: "Müşteri", prompt: "Müşteri veya şirket adını paylaşır mısınız?", optional: true },
+  { key: "project", label: "Proje", prompt: "İlgili proje adı nedir?", optional: true },
+  { key: "address", label: "Adres", prompt: "Adres veya lokasyon bilgisini paylaşır mısınız?", optional: true },
+  { key: "notes", label: "Notlar", prompt: "Ek not var mı? Yoksa 'yok' yazabilirsiniz.", optional: true },
+];
+
+const inspectionStatuses = [
+  "Pending Inspection",
+  "Scheduled",
+  "Inspector Assigned",
+  "Inspection In Progress",
+  "Inspection Completed",
+  "Report Uploaded",
+  "Cancelled",
+];
+
+function formatLeadSummary(title: string, fields: LeadField[], data: Record<string, string>) {
+  const lines = [
+    ...fields.map((field) => `${field.label}: ${data[field.key] || (field.optional ? "Belirtilmedi" : "-")}`),
+  ];
+  return title ? [title, ...lines].join("\n") : lines.join("\n");
+}
+
+function saveLocalRequest(type: string, payload: Record<string, string>) {
+  if (typeof window === "undefined") return;
+  const key = "panter-ai-requests";
+  const current = JSON.parse(window.localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
+  current.push({ type, payload, createdAt: new Date().toISOString() });
+  window.localStorage.setItem(key, JSON.stringify(current));
+}
+
+async function saveAdminRequest(type: AdminRequestType, payload: Record<string, string>) {
+  const apiBase = (process.env.NEXT_PUBLIC_PANTER_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
+
+  try {
+    const response = await fetch(`${apiBase}/panter/requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, payload, source: "panter-ai" }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Panter admin request failed: ${response.status}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn("Panter admin backend unavailable, request saved locally.", error);
+    saveLocalRequest(type, payload);
+    return false;
+  }
+}
+
+async function saveOperationEvent(payload: Record<string, string>) {
+  const apiBase = (process.env.NEXT_PUBLIC_PANTER_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
+
+  try {
+    const response = await fetch(`${apiBase}/panter/operation-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: payload.title || payload.eventType || "Panter AI Operasyon Etkinliği",
+        description: payload.notes || payload.eventType,
+        date: payload.date || payload.preferredDate,
+        start_time: payload.start_time || payload.preferredTime,
+        end_time: payload.end_time,
+        event_type: payload.eventType || "Other",
+        status: "Pending",
+        priority: "Medium",
+        customer: payload.customer || payload.company || payload.name,
+        project: payload.project || payload.projectName,
+        address: payload.address || payload.projectAddress,
+        notes: payload.notes,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Panter operation event failed: ${response.status}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn("Panter operation calendar backend unavailable.", error);
+    saveLocalRequest("operationEvent", payload);
+    return false;
+  }
+}
+
+function adminSaveMessage(savedToBackend: boolean) {
+  return savedToBackend
+    ? "Talep admin paneline gönderildi."
+    : "Backend şu anda erişilemediği için talep geçici olarak tarayıcıda saklandı.";
+}
+
+function normalizeText(value: string) {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function extractInfo(message: string, mode: ChatMode) {
+  const normalized = normalizeText(message);
+  const info: Record<string, string> = {};
+  const email = message.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+  const phone = message.match(/(?:\+?90\s*)?(?:0\s*)?5\d{2}[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}/)?.[0];
+  const cityMatch = message.match(/(?:şehir|sehir|il|lokasyon|konum)\s*[:=-]?\s*([A-Za-zÇĞİÖŞÜçğıöşü\s]{2,30})(?=,|\.|;|$)/i);
+  const companyMatch = message.match(/(?:şirket|sirket|firma|kurum)\s*[:=-]?\s*([A-Za-z0-9ÇĞİÖŞÜçğıöşü\s.&-]{2,50})(?=,|\.|;|$)/i);
+  const nameMatch = message.match(/(?:adım|adim|ad soyad|ismim|ben)\s*[:=-]?\s*([A-Za-zÇĞİÖŞÜçğıöşü\s]{3,40})(?=,|\.|;|$)/i);
+  const personnelMatch = normalized.match(/(\d+)\s*(?:personel|guvenlik|gorevli|kişi|kisi)/);
+  const timeMatch = message.match(/\b([01]?\d|2[0-3])[:.][0-5]\d\b|\b([01]?\d|2[0-3])\s*(?:de|da)\b/i);
+  const dateMatch = message.match(/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b|(?:pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar|yarın|yarin|haftaya|bugün|bugun)/i);
+  const addressMatch = message.match(/(?:adres|adresi|lokasyon|konum)\s*[:=-]?\s*([^.;\n]{5,90})/i);
+  const projectMatch = message.match(/(?:proje adı|proje adi|proje)\s*[:=-]?\s*([A-Za-z0-9ÇĞİÖŞÜçğıöşü\s.&-]{2,60})(?=,|\.|;|$)/i);
+
+  if (email) info.email = email;
+  if (phone) info.phone = phone;
+  if (cityMatch?.[1]) info.city = cityMatch[1].trim();
+  if (companyMatch?.[1]) info.company = companyMatch[1].trim();
+  if (nameMatch?.[1]) info.name = nameMatch[1].trim();
+  if (personnelMatch?.[1]) info.personnelCount = personnelMatch[1];
+  if (timeMatch?.[0]) {
+    info.preferredTime = timeMatch[0].trim();
+    info.start_time = timeMatch[0].trim();
+  }
+  if (dateMatch?.[0]) {
+    info.preferredDate = dateMatch[0].trim();
+    info.date = dateMatch[0].trim();
+  }
+  if (addressMatch?.[1]) {
+    info.projectAddress = addressMatch[1].trim();
+    info.address = addressMatch[1].trim();
+  }
+  if (projectMatch?.[1]) {
+    info.projectName = projectMatch[1].trim();
+    info.project = projectMatch[1].trim();
+  }
+
+  const serviceKeywords = [
+    "tesis güvenliği",
+    "tesis guvenligi",
+    "özel güvenlik",
+    "ozel guvenlik",
+    "vip koruma",
+    "yakın koruma",
+    "yakin koruma",
+    "etkinlik güvenliği",
+    "etkinlik guvenligi",
+    "cctv",
+    "kamera",
+    "alarm",
+    "mobil devriye",
+    "kurumsal güvenlik",
+    "kurumsal guvenlik",
+  ];
+  const service = serviceKeywords.find((keyword) => normalized.includes(normalizeText(keyword)));
+  if (service) info.service = service;
+
+  if (mode === "recruitment") {
+    if (normalized.includes("cv")) info.cv = message;
+    if (normalized.includes("lisans") || normalized.includes("kimlik kart")) info.license = message;
+    if (normalized.includes("deneyim") || normalized.includes("tecrube") || normalized.includes("tecrübe") || /\d+\s*yil/.test(normalized)) {
+      info.experience = message;
+    }
+  }
+
+  if (mode === "inspection") {
+    const facilityTypes = [
+      ["fabrika", "Fabrika"],
+      ["factory", "Fabrika"],
+      ["avm", "Alışveriş Merkezi"],
+      ["alisveris merkezi", "Alışveriş Merkezi"],
+      ["shopping mall", "Alışveriş Merkezi"],
+      ["site", "Residential Site"],
+      ["residential", "Residential Site"],
+      ["konut", "Residential Site"],
+      ["otel", "Otel"],
+      ["hotel", "Otel"],
+      ["hastane", "Hastane"],
+      ["hospital", "Hastane"],
+      ["ofis", "Ofis"],
+      ["office", "Ofis"],
+      ["depo", "Depo"],
+      ["lojistik", "Lojistik Tesisi"],
+      ["okul", "Eğitim Kurumu"],
+    ] as const;
+    const facility = facilityTypes.find(([keyword]) => normalized.includes(keyword));
+    if (facility) info.facilityType = facility[1];
+
+    const reasons = [
+      ["zayif", "Güvenlik zayıf noktalarının belirlenmesi"],
+      ["eksik", "Eksik güvenlik önlemlerinin tespiti"],
+      ["risk", "Risk analizi"],
+      ["denetim", "Güvenlik denetimi"],
+      ["audit", "Güvenlik denetimi"],
+      ["inceleme", "Proje incelemesi"],
+      ["kontrol", "Proje kontrolü"],
+      ["revizyon", "Proje revizyonu"],
+    ] as const;
+    const reason = reasons.find(([keyword]) => normalized.includes(keyword));
+    if (reason) info.reason = reason[1];
+
+    if (service) info.currentServices = service;
+  }
+
+  if (mode === "operationEvent") {
+    const eventTypes = [
+      ["saha keşfi", "Site Survey"],
+      ["saha kesfi", "Site Survey"],
+      ["site survey", "Site Survey"],
+      ["keşif", "Site Survey"],
+      ["kesif", "Site Survey"],
+      ["eğitim", "Employee Training"],
+      ["egitim", "Employee Training"],
+      ["training", "Employee Training"],
+      ["iç toplantı", "Internal Meeting"],
+      ["ic toplanti", "Internal Meeting"],
+      ["internal meeting", "Internal Meeting"],
+      ["toplantı", "Customer Meeting"],
+      ["toplanti", "Customer Meeting"],
+      ["meeting", "Customer Meeting"],
+      ["bakım", "Equipment Maintenance"],
+      ["bakim", "Equipment Maintenance"],
+      ["maintenance", "Equipment Maintenance"],
+      ["hatırlatma", "Reminder"],
+      ["hatirlatma", "Reminder"],
+      ["reminder", "Reminder"],
+    ] as const;
+    const eventType = eventTypes.find(([keyword]) => normalized.includes(keyword));
+    if (eventType) info.eventType = eventType[1];
+    if (!info.title) info.title = message.slice(0, 70);
+    if (info.company) info.customer = info.company;
+  }
+
+  return info;
+}
+
+function getMissingField(fields: LeadField[], data: Record<string, string>) {
+  return fields.find((field) => !field.optional && !data[field.key]);
+}
+
+function mergeLeadData(current: Record<string, string>, message: string, mode: ChatMode, activeField?: LeadField) {
+  const normalized = normalizeText(message);
+  const extracted = extractInfo(message, mode);
+  const next = { ...current, ...extracted };
+
+  if (activeField && !next[activeField.key]) {
+    const skipOptional = activeField.optional && ["gec", "geç", "yok", "hayir", "hayır"].includes(normalized);
+    next[activeField.key] = skipOptional ? "" : message;
+  }
+
+  return next;
+}
+
+function getPanterResponse(question: string) {
+  const normalized = normalizeText(question);
+
+  const hasAny = (words: string[]) => words.some((word) => normalized.includes(word));
+
+  if (hasAny(["ogren", "öğren", "egit ai", "admin", "bilgi ekle", "dokuman", "pdf", "politika"])) {
+    return "Panter AI yalnızca yetkili yöneticiler tarafından eğitilebilir. Yeni bilgi, doküman veya politika eklemek için admin paneli gerekir. Ziyaretçilerden gelen bilgiler otomatik olarak öğrenilmez.";
+  }
+
+  if (hasAny(["inceleme", "denetim", "audit", "risk analizi", "proje kontrol", "proje inceleme", "zayif nokta", "zayıf nokta", "guvenlik acigi", "güvenlik açığı"])) {
+    return "Güvenlik projenizi incelemek için Panter saha keşif / denetim talebi oluşturabilir. Şirket, yetkili kişi, iletişim, proje adresi, tesis türü, personel sayısı ve tercih edilen tarih-saat bilgileriyle randevu planlanır.";
+  }
+
+  if (hasAny(["basvuru", "iş", "is", "kariyer", "cv", "eleman", "çalışmak", "calismak"])) {
+    return "İş başvurusu için CV, ad soyad, telefon ve e-posta bilgileri gerekir. Değerlendirme yalnızca görevle ilgili niteliklere göre yapılır; yaş, cinsiyet, din, ırk, uyruk veya engellilik gibi korunan özellikler dikkate alınmaz.";
+  }
+
+  if (hasAny(["hizmet", "ne yapi", "ne yap", "neler", "alan"])) {
+    return "Panter; özel güvenlik, VIP koruma, etkinlik güvenliği, CCTV, alarm sistemleri, mobil devriye, kurumsal güvenlik, tesis güvenliği ve risk danışmanlığı konularında destek olabilir.";
+  }
+
+  if (hasAny(["iletisim", "telefon", "mail", "e posta", "adres", "ulas"])) {
+    return `Panter ile iletişime geçmek için ${company.phone} numarasını arayabilir, ${company.email} adresine e-posta gönderebilir veya sayfadaki iletişim formunu doldurabilirsiniz.`;
+  }
+
+  if (hasAny(["teklif", "fiyat", "ucret", "maliyet", "kac para"])) {
+    return "Fiyat bilgisi uydurmam doğru olmaz. Teklif; şehir, hizmet türü, personel sayısı, görev süresi ve risk seviyesine göre hazırlanır. İsterseniz teklif talebi oluşturmanıza yardımcı olabilirim.";
+  }
+
+  if (hasAny(["egitim", "kurs", "sertifika", "personel", "guvenlik gorevlisi"])) {
+    return "Panter personel yapısında eğitim, disiplin, temsil kabiliyeti, dikkat, kriz yönetimi ve görev bilinci önemlidir. Personel ihtiyacınıza göre uygun ekip planlaması yapılabilir.";
+  }
+
+  if (hasAny(["tesis", "site", "fabrika", "avm", "otel", "ofis", "depo", "lojistik"])) {
+    return "Tesis güvenliğinde giriş-çıkış kontrolü, devriye planı, ziyaretçi yönetimi, kamera takibi, olay raporlama ve acil durum prosedürleri birlikte değerlendirilir.";
+  }
+
+  if (hasAny(["yakin koruma", "koruma", "vip", "yonetici", "transfer"])) {
+    return "Yakın koruma hizmetinde kişinin günlük programı, ulaşım rotası, risk seviyesi ve gizlilik ihtiyacı analiz edilerek güvenli hareket planı hazırlanır.";
+  }
+
+  if (hasAny(["kamera", "alarm", "teknoloji", "izleme", "uzaktan"])) {
+    return "CCTV, alarm sistemleri, uzaktan izleme ve olay kayıt süreçleri saha güvenliğini destekler. Net kapsam için keşif ve ihtiyaç analizi yapılması önerilir.";
+  }
+
+  if (hasAny(["etkinlik", "organizasyon", "konser", "toplanti", "dugun"])) {
+    return "Etkinlik güvenliğinde giriş kontrolü, kalabalık yönetimi, VIP alan güvenliği, yönlendirme ve acil durum planlaması yapılır.";
+  }
+
+  if (hasAny(["merhaba", "selam", "iyi gunler", "nasilsin"])) {
+    return "Merhaba, ben Panter. Size Panter Güvenlik hizmetleri, teklif süreci, iletişim bilgileri veya güvenlik planlaması hakkında yardımcı olabilirim.";
+  }
+
+  return `“${question}” sorunuzla ilgili yardımcı olayım. Bu konu daha çok hizmetler, teklif, iletişim, personel, tesis güvenliği veya yakın koruma başlıklarından hangisiyle ilgili?`;
+}
 
 function LogoBlock({ inverse = false }: { inverse?: boolean }) {
   return (
@@ -125,22 +513,42 @@ function Navbar() {
 }
 
 function Hero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const slide = heroSlides[activeSlide];
+  const goToNextSlide = () => setActiveSlide((current) => (current + 1) % heroSlides.length);
+  const goToPreviousSlide = () => setActiveSlide((current) => (current - 1 + heroSlides.length) % heroSlides.length);
+
   return (
     <section id="top" className="bg-white">
       <div className="mx-auto max-w-6xl">
-        <div className="relative min-h-[520px] overflow-hidden">
-          <div
-            className="absolute inset-0 bg-cover bg-center"
-            style={{
-              backgroundImage:
-                "linear-gradient(90deg, rgba(0,0,0,0.25), rgba(0,0,0,0.05)), url('https://images.unsplash.com/photo-1494412574643-ff11b0a5c1c3?auto=format&fit=crop&w=1600&q=80')",
-            }}
-          />
+        <div
+          className="relative min-h-[520px] cursor-pointer overflow-hidden"
+          role="button"
+          tabIndex={0}
+          aria-label="Sonraki görsele geç"
+          onClick={goToNextSlide}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") goToNextSlide();
+          }}
+        >
+          {heroSlides.map((item, index) => (
+            <motion.div
+              key={item.image}
+              aria-hidden={activeSlide !== index}
+              animate={{ opacity: activeSlide === index ? 1 : 0, scale: activeSlide === index ? 1 : 1.03 }}
+              transition={{ duration: 0.55, ease: "easeOut" }}
+              className="absolute inset-0 bg-cover bg-center"
+              style={{
+                backgroundImage: `linear-gradient(90deg, rgba(0,0,0,0.25), rgba(0,0,0,0.05)), url('${item.image}')`,
+              }}
+            />
+          ))}
           <motion.div
             initial="hidden"
             animate="visible"
             variants={fadeUp}
             transition={{ duration: 0.75, ease: "easeOut" }}
+            onClick={(event) => event.stopPropagation()}
             className="absolute left-8 top-20 max-w-xl bg-black/82 p-8 text-white md:left-12 md:top-28 md:p-10"
           >
             <p className="text-3xl font-light text-red-500 md:text-4xl">Güvenlikte Yeni Nesil</p>
@@ -148,14 +556,39 @@ function Hero() {
             <p className="mt-5 text-lg leading-8 text-zinc-200">
               Panter, işletmelerin insanlarını, varlıklarını ve operasyonlarını profesyonel ekiplerle korur.
             </p>
+            <p className="mt-4 text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">{slide.label}</p>
             <a href="#services" className="mt-8 inline-flex items-center gap-3 bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700">
               Hizmetleri keşfet <ArrowRight className="h-5 w-5" />
             </a>
           </motion.div>
-          <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-3 bg-black py-4">
-            {[0, 1, 2, 3].map((item) => (
-              <span key={item} className={`h-0.5 w-10 ${item === 0 ? "bg-red-600" : "bg-white/50"}`} />
+          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-4 bg-black py-4" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              aria-label="Önceki görsel"
+              onClick={goToPreviousSlide}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/25 text-white transition hover:border-red-600 hover:bg-red-600"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <div className="flex items-center gap-3">
+            {heroSlides.map((item, index) => (
+              <button
+                key={item.image}
+                type="button"
+                aria-label={`${item.label} görseline geç`}
+                onClick={() => setActiveSlide(index)}
+                className={`h-0.5 w-12 transition ${activeSlide === index ? "bg-red-600" : "bg-white/50 hover:bg-white"}`}
+              />
             ))}
+            </div>
+            <button
+              type="button"
+              aria-label="Sonraki görsel"
+              onClick={goToNextSlide}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/25 text-white transition hover:border-red-600 hover:bg-red-600"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
           </div>
         </div>
       </div>
@@ -326,6 +759,346 @@ function Footer() {
   );
 }
 
+function PanterAssistant() {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [mode, setMode] = useState<ChatMode>("general");
+  const [leadData, setLeadData] = useState<Record<string, string>>({});
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      text: initialPanterMessage,
+    },
+  ]);
+
+  const sendMessage = async () => {
+    const question = input.trim();
+    if (!question) return;
+
+    const normalized = normalizeText(question);
+    const userMessage: ChatMessage = { role: "user", text: question };
+
+    if (mode === "quotation") {
+      const activeField = getMissingField(quotationFields, leadData);
+      const nextData = mergeLeadData(leadData, question, "quotation", activeField);
+      const missingField = getMissingField(quotationFields, nextData);
+
+      if (missingField) {
+        setLeadData(nextData);
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `Anladım. Şu ana kadar aldığım bilgiler: ${formatLeadSummary("", quotationFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`,
+          },
+        ]);
+      } else {
+        const savedToBackend = await saveAdminRequest("quotation", nextData);
+        setMode("general");
+        setLeadData({});
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `${formatLeadSummary("Teklif talebiniz oluşturuldu:", quotationFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}`,
+          },
+        ]);
+      }
+      setInput("");
+      return;
+    }
+
+    if (mode === "recruitment") {
+      const activeField = getMissingField(recruitmentFields, leadData);
+      const nextData = mergeLeadData(leadData, question, "recruitment", activeField);
+      const missingField = getMissingField(recruitmentFields, nextData);
+
+      if (missingField) {
+        setLeadData(nextData);
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `Teşekkürler. Verdiğiniz bilgileri not ettim. Eksik olan bilgi: ${missingField.prompt}`,
+          },
+        ]);
+      } else {
+        const savedToBackend = await saveAdminRequest("recruitment", nextData);
+        setMode("general");
+        setLeadData({});
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)} CV dosyasını okuyup otomatik puanlama yapmak için dosya yükleme altyapısı ayrıca eklenmelidir.`,
+          },
+        ]);
+      }
+      setInput("");
+      return;
+    }
+
+    if (mode === "inspection") {
+      const activeField = getMissingField(inspectionFields, leadData);
+      const nextData = mergeLeadData(leadData, question, "inspection", activeField);
+      const missingField = getMissingField(inspectionFields, nextData);
+
+      if (missingField) {
+        setLeadData(nextData);
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `Anladım. İnceleme talebi için paylaştığınız bilgileri not ettim.\n\n${formatLeadSummary("", inspectionFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`,
+          },
+        ]);
+      } else {
+        const inspectionRequest = {
+          ...nextData,
+          status: inspectionStatuses[0],
+          inspectionType: nextData.reason || "Güvenlik proje incelemesi",
+        };
+        const savedToBackend = await saveAdminRequest("inspection", inspectionRequest);
+        setMode("general");
+        setLeadData({});
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `${formatLeadSummary("İnceleme randevu talebiniz oluşturuldu:", inspectionFields, inspectionRequest)}\nDurum: ${inspectionRequest.status}\n\n${adminSaveMessage(savedToBackend)}`,
+          },
+        ]);
+      }
+      setInput("");
+      return;
+    }
+
+    if (mode === "operationEvent") {
+      const activeField = getMissingField(operationEventFields, leadData);
+      const nextData = mergeLeadData(leadData, question, "operationEvent", activeField);
+      const missingField = getMissingField(operationEventFields, nextData);
+
+      if (missingField) {
+        setLeadData(nextData);
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `Operasyon takvimi için bilgileri not ettim.\n\n${formatLeadSummary("", operationEventFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`,
+          },
+        ]);
+      } else {
+        const savedToBackend = await saveOperationEvent(nextData);
+        setMode("general");
+        setLeadData({});
+        setMessages((current) => [
+          ...current,
+          userMessage,
+          {
+            role: "assistant",
+            text: `${formatLeadSummary("Operasyon takvimi etkinliği oluşturuldu:", operationEventFields, nextData)}\n\n${savedToBackend ? "Etkinlik operasyon takvimine eklendi ve yöneticilerin panelinde görünecek." : "Backend şu anda erişilemediği için etkinlik geçici olarak tarayıcıda saklandı."}`,
+          },
+        ]);
+      }
+      setInput("");
+      return;
+    }
+
+    if (["inceleme", "denetim", "audit", "risk", "zayif", "zayıf", "proje kontrol", "proje inceleme", "keşif", "kesif"].some((word) => normalized.includes(normalizeText(word)))) {
+      const nextData = mergeLeadData({}, question, "inspection");
+      const missingField = getMissingField(inspectionFields, nextData);
+      const inspectionRequest = { ...nextData, status: inspectionStatuses[0], inspectionType: nextData.reason || "Güvenlik proje incelemesi" };
+      const savedToBackend = missingField ? false : await saveAdminRequest("inspection", inspectionRequest);
+      setMode("inspection");
+      setLeadData(nextData);
+      setMessages((current) => [
+        ...current,
+        userMessage,
+        {
+          role: "assistant",
+          text: missingField
+            ? `Güvenlik proje incelemesi için yardımcı olurum. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", inspectionFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
+            : `${formatLeadSummary("İnceleme randevu talebiniz oluşturuldu:", inspectionFields, inspectionRequest)}\nDurum: ${inspectionStatuses[0]}\n\n${adminSaveMessage(savedToBackend)}`,
+        },
+      ]);
+      if (!missingField) {
+        setMode("general");
+        setLeadData({});
+      }
+      setInput("");
+      return;
+    }
+
+    if (["toplanti", "toplantı", "meeting", "egitim", "eğitim", "training", "saha kesfi", "saha keşfi", "site survey", "ic toplanti", "iç toplantı", "bakim", "bakım", "maintenance", "hatirlatma", "hatırlatma"].some((word) => normalized.includes(normalizeText(word)))) {
+      const nextData = mergeLeadData({}, question, "operationEvent");
+      const missingField = getMissingField(operationEventFields, nextData);
+      const savedToBackend = missingField ? false : await saveOperationEvent(nextData);
+      setMode("operationEvent");
+      setLeadData(nextData);
+      setMessages((current) => [
+        ...current,
+        userMessage,
+        {
+          role: "assistant",
+          text: missingField
+            ? `Bu talebi operasyon takvimine ekleyebilirim. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", operationEventFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
+            : `${formatLeadSummary("Operasyon takvimi etkinliği oluşturuldu:", operationEventFields, nextData)}\n\n${savedToBackend ? "Etkinlik operasyon takvimine eklendi ve yöneticilere bildirilecek." : "Backend şu anda erişilemediği için etkinlik geçici olarak tarayıcıda saklandı."}`,
+        },
+      ]);
+      if (!missingField) {
+        setMode("general");
+        setLeadData({});
+      }
+      setInput("");
+      return;
+    }
+
+    if (["teklif", "fiyat", "ucret", "ücret", "maliyet"].some((word) => normalized.includes(word))) {
+      const nextData = mergeLeadData({}, question, "quotation");
+      const missingField = getMissingField(quotationFields, nextData);
+      const savedToBackend = missingField ? false : await saveAdminRequest("quotation", nextData);
+      setMode("quotation");
+      setLeadData(nextData);
+      setMessages((current) => [
+        ...current,
+        userMessage,
+        {
+          role: "assistant",
+          text: missingField
+            ? `Teklif talebi için yardımcı olurum. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", quotationFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
+            : `${formatLeadSummary("Teklif talebiniz oluşturuldu:", quotationFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}`,
+        },
+      ]);
+      if (!missingField) {
+        setMode("general");
+        setLeadData({});
+      }
+      setInput("");
+      return;
+    }
+
+    if (["basvuru", "başvuru", "kariyer", "cv", "is", "iş"].some((word) => normalized.includes(word))) {
+      const nextData = mergeLeadData({}, question, "recruitment");
+      const missingField = getMissingField(recruitmentFields, nextData);
+      const savedToBackend = missingField ? false : await saveAdminRequest("recruitment", nextData);
+      setMode("recruitment");
+      setLeadData(nextData);
+      setMessages((current) => [
+        ...current,
+        userMessage,
+        {
+          role: "assistant",
+          text: missingField
+            ? `Başvuru için yardımcı olurum. Paylaştığınız bilgileri not ettim. Eksik olan bilgi: ${missingField.prompt}`
+            : `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)} CV dosyasını okuyup otomatik puanlama yapmak için dosya yükleme altyapısı ayrıca eklenmelidir.`,
+        },
+      ]);
+      if (!missingField) {
+        setMode("general");
+        setLeadData({});
+      }
+      setInput("");
+      return;
+    }
+
+    setMessages((current) => [...current, userMessage, { role: "assistant", text: getPanterResponse(question) }]);
+    setInput("");
+  };
+
+  return (
+    <div className="fixed bottom-4 right-4 z-[60] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-3">
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.94 }}
+            transition={{ type: "spring", stiffness: 260, damping: 22 }}
+            className="relative w-[22rem] max-w-full rounded-3xl border border-cyan-200/70 bg-white p-4 shadow-2xl shadow-cyan-950/20"
+          >
+            <div className="absolute -bottom-3 right-16 h-6 w-6 rotate-45 border-b border-r border-cyan-200/70 bg-white" />
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
+              <div>
+                <p className="text-sm font-extrabold uppercase tracking-wide text-zinc-950">Panter AI</p>
+                <p className="text-xs text-zinc-500">Panter Güvenlik asistanı</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Sohbeti kapat"
+                onClick={() => setOpen(false)}
+                className="rounded-full p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
+              {messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-800"}`}>
+                    {message.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <form
+              className="mt-4 flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                sendMessage();
+              }}
+            >
+              <input
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="Sorunuzu yazın..."
+                className="min-w-0 flex-1 rounded-full border border-zinc-200 px-4 py-3 text-sm text-zinc-900 outline-none transition focus:border-red-600"
+              />
+              <button type="submit" className="rounded-full bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700">
+                Gönder
+              </button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <motion.button
+        type="button"
+        aria-label="Panter yapay zeka asistanını aç"
+        onClick={() => setOpen((value) => !value)}
+        initial={false}
+        animate={open ? { y: [0, -6, 0] } : { y: 0 }}
+        whileHover={{ y: -4, scale: 1.02 }}
+        whileTap={{ scale: 0.96 }}
+        transition={{ duration: 0.55 }}
+        className="group flex items-center gap-3 rounded-3xl border border-cyan-300/60 bg-zinc-950 p-2 pr-5 text-left text-white shadow-2xl shadow-cyan-950/30 transition hover:border-cyan-200"
+      >
+        <span className="relative h-24 w-32 overflow-hidden rounded-2xl bg-zinc-900 ring-2 ring-cyan-300/70">
+          <Image src="/panter-ai-assistant.png" alt="Panter yapay zeka asistanı" fill sizes="128px" className="object-cover object-center transition group-hover:scale-105" />
+          {open && (
+            <span className="absolute right-2 top-2 flex h-4 w-4">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-300 opacity-75" />
+              <span className="relative inline-flex h-4 w-4 rounded-full bg-cyan-300" />
+            </span>
+          )}
+        </span>
+        <span className="hidden sm:block">
+          <span className="block text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">Yapay Zeka</span>
+          <span className="block text-sm font-bold">Panter&apos;e Sor</span>
+        </span>
+      </motion.button>
+    </div>
+  );
+}
+
 export default function LandingPage() {
   return (
     <main className="overflow-hidden">
@@ -337,6 +1110,7 @@ export default function LandingPage() {
       <News />
       <Contact />
       <Footer />
+      <PanterAssistant />
     </main>
   );
 }
