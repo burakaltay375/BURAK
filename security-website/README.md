@@ -19,7 +19,13 @@ Panter AI sends completed quotation, recruitment, and inspection requests to the
 POST /api/panter/requests
 ```
 
-The website reads the backend URL from `NEXT_PUBLIC_API_URL`. Copy `.env.example` to `.env.local` if your backend URL is different.
+The website reads the backend URL from `NEXT_PUBLIC_API_URL` (or optional `NEXT_PUBLIC_PANTER_API_URL`). Copy `.env.example` to `.env.local`:
+
+```bash
+cp .env.example .env.local
+```
+
+See the root `README.md` for the full environment variable list.
 
 Admin request management is available at:
 

@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import { useAdminResource } from "@/hooks/useAdminResource";
-import { panterAdminApi, type Appointment, type PanterProject, type PanterRequest, type ProjectInput, type ShiftEmployeeInput, type ShiftPlan, type SupportRequestInput } from "@/lib/panterAdminApi";
+import { panterAdminApi, type Appointment, type PanterProject, type PanterRequest, type ProjectInput, type ShiftEmployeeInput, type ShiftPlan, type ShiftPlanInput, type SupportRequestInput } from "@/lib/panterAdminApi";
 
 const inspectionStatuses = [
   "Pending Inspection",
@@ -163,7 +163,7 @@ const emptyShiftEmployee: ShiftEmployeeInput = {
   assigned_projects: [],
 };
 
-const defaultShiftPlan = {
+const defaultShiftPlan: ShiftPlanInput = {
   project: "",
   date_range: { start: "", end: "" },
   working_hours: "24/7",
