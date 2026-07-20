@@ -3,8 +3,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
-  Building2,
-  Camera,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -13,12 +11,11 @@ import {
   MapPin,
   Menu,
   Phone,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
-import { company } from "@/content/site";
+import { company, projectReferences, riskConsultingShowcase, securityPersonnelShowcase, technologyOperationsShowcase } from "@/content/site";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 24 },
@@ -26,24 +23,6 @@ const fadeUp = {
 };
 
 const navItems = ["Biz kimiz", "Ne yapıyoruz", "Kariyer", "Haberler", "İletişim"];
-
-const serviceCards = [
-  {
-    title: "Güvenlik Personeli",
-    text: "Kurumsal alanlar için eğitimli, disiplinli ve temsil gücü yüksek güvenlik ekipleri.",
-    icon: ShieldCheck,
-  },
-  {
-    title: "Teknolojik Çözümler",
-    text: "Kamera, alarm, uzaktan izleme ve olay takip süreçleriyle desteklenen güvenlik yönetimi.",
-    icon: Camera,
-  },
-  {
-    title: "Risk Danışmanlığı",
-    text: "Tesis, operasyon ve insan hareketlerine göre hazırlanan güvenlik analizleri ve aksiyon planları.",
-    icon: Building2,
-  },
-];
 
 const stats = [
   { value: "7/24", label: "Operasyon" },
@@ -468,7 +447,7 @@ function Navbar() {
             <Globe2 className="h-4 w-4" />
             <span className="flex items-center gap-1">Kurumsal web sitesi <ChevronDown className="h-3 w-3" /></span>
           </div>
-          <a href="#contact" className="font-medium hover:text-red-600">Ara / İletişim</a>
+          <a href={company.phoneHref} className="font-medium hover:text-red-600">Ara / İletişim</a>
         </div>
       </div>
 
@@ -631,6 +610,81 @@ function IntroStats() {
   );
 }
 
+function ShowcaseSlider({
+  title,
+  slides,
+  first = false,
+}: {
+  title: string;
+  slides: Array<{ image: string; title: string; subtitle: string }>;
+  first?: boolean;
+}) {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const slide = slides[activeSlide];
+  const goToNextSlide = () => setActiveSlide((current) => (current + 1) % slides.length);
+  const goToPreviousSlide = () => setActiveSlide((current) => (current - 1 + slides.length) % slides.length);
+
+  return (
+    <div className={`${first ? "mt-10" : "mt-16 border-t border-zinc-300 pt-14"}`}>
+      <h3 className="text-2xl font-extrabold text-zinc-950 md:text-3xl">{title}</h3>
+      <div className="relative mt-8 overflow-hidden bg-zinc-900 shadow-md">
+        <div className="relative aspect-[16/9] md:aspect-[21/9]">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={slide.image}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.45 }}
+              className="absolute inset-0"
+            >
+              <Image src={slide.image} alt={slide.title} fill sizes="100vw" className="object-cover" priority={first && activeSlide === 0} />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-6 md:p-10">
+                <p className="max-w-3xl text-xl font-extrabold leading-snug text-white md:text-3xl">{slide.title}</p>
+                <p className="mt-3 text-sm font-bold uppercase tracking-[0.14em] text-red-500 md:text-base">{slide.subtitle}</p>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        {slides.length > 1 && (
+          <>
+            <button
+              type="button"
+              aria-label="Önceki görsel"
+              onClick={goToPreviousSlide}
+              className="absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/35 text-white transition hover:border-red-600 hover:bg-red-600"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Sonraki görsel"
+              onClick={goToNextSlide}
+              className="absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/35 text-white transition hover:border-red-600 hover:bg-red-600"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
+
+            <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-2">
+              {slides.map((item, index) => (
+                <button
+                  key={item.image}
+                  type="button"
+                  aria-label={`${index + 1}. görsele geç`}
+                  onClick={() => setActiveSlide(index)}
+                  className={`h-2.5 w-10 rounded-full transition ${activeSlide === index ? "bg-red-600" : "bg-white/45 hover:bg-white/70"}`}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Services() {
   return (
     <section id="services" className="bg-zinc-100 py-14">
@@ -642,28 +696,44 @@ function Services() {
           </p>
         </div>
 
-        <div className="mt-10 grid gap-6 md:grid-cols-3">
-          {serviceCards.map((service, index) => {
-            const Icon = service.icon;
-            return (
+        <ShowcaseSlider title="Güvenlik Personeli" slides={securityPersonnelShowcase} first />
+        <ShowcaseSlider title="Teknoloji Destekli Güvenlik Operasyonları" slides={technologyOperationsShowcase} />
+        <ShowcaseSlider title="Risk Danışmanlığı" slides={riskConsultingShowcase} />
+
+        <div id="references" className="mt-16 border-t border-zinc-300 pt-14">
+          <div className="max-w-3xl">
+            <p className="text-sm font-bold uppercase tracking-[0.18em] text-red-600">Referanslarımız</p>
+            <h3 className="mt-3 text-3xl font-extrabold text-zinc-950">Risk danışmanlığı projelerimiz</h3>
+            <p className="mt-4 text-lg leading-8 text-zinc-700">
+              Tesis güvenliği ve risk danışmanlığı kapsamında hizmet verdiğimiz seçili lokasyonlardan bazıları.
+            </p>
+          </div>
+
+          <div className="mt-10 grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
+            {projectReferences.map((reference, index) => (
               <motion.article
-                key={service.title}
+                key={reference.name}
                 variants={fadeUp}
                 initial="hidden"
                 whileInView="visible"
-                viewport={{ once: true, amount: 0.25 }}
-                transition={{ duration: 0.55, delay: index * 0.07 }}
-                className="bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:shadow-xl"
+                viewport={{ once: true, amount: 0.2 }}
+                transition={{ duration: 0.55, delay: index * 0.08 }}
+                className="group relative aspect-[4/3] overflow-hidden bg-zinc-900 shadow-md transition hover:-translate-y-1 hover:shadow-xl"
               >
-                <Icon className="h-10 w-10 text-red-600" />
-                <h3 className="mt-7 text-2xl font-bold text-zinc-950">{service.title}</h3>
-                <p className="mt-4 leading-7 text-zinc-600">{service.text}</p>
-                <a href="#contact" className="mt-7 inline-flex items-center gap-2 font-semibold text-red-600">
-                  Devamı <ArrowRight className="h-4 w-4" />
-                </a>
+                <Image
+                  src={reference.image}
+                  alt={reference.name}
+                  fill
+                  sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 25vw"
+                  className="object-cover transition duration-500 group-hover:scale-105"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                <div className="absolute inset-x-0 bottom-0 p-5">
+                  <p className="text-lg font-extrabold leading-snug text-white drop-shadow-sm">{reference.name}</p>
+                </div>
               </motion.article>
-            );
-          })}
+            ))}
+          </div>
         </div>
       </div>
     </section>
@@ -723,9 +793,34 @@ function Contact() {
           <h2 className="text-3xl font-extrabold">İletişim</h2>
           <p className="mt-4 leading-7 text-red-50">Güvenlik ihtiyaçlarınız için Panter ekibiyle iletişime geçin.</p>
           <div className="mt-8 space-y-4">
-            <p className="flex items-center gap-3"><Phone className="h-5 w-5" /> {company.phone}</p>
-            <p className="flex items-center gap-3"><Mail className="h-5 w-5" /> {company.email}</p>
-            <p className="flex items-center gap-3"><MapPin className="h-5 w-5" /> {company.address}</p>
+            <a
+              href={company.phoneHref}
+              className="flex items-center gap-3 transition hover:underline"
+              aria-label={`${company.phone} numarasını ara`}
+            >
+              <Phone className="h-5 w-5 shrink-0" />
+              {company.phone}
+            </a>
+            <a
+              href={company.gmailHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 transition hover:underline"
+              aria-label={`${company.email} adresine e-posta gönder`}
+            >
+              <Mail className="h-5 w-5 shrink-0" />
+              {company.email}
+            </a>
+            <a
+              href={company.mapsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-3 transition hover:underline"
+              aria-label="Adresi Google Haritalar'da aç"
+            >
+              <MapPin className="mt-0.5 h-5 w-5 shrink-0" />
+              <span>{company.address}</span>
+            </a>
           </div>
         </div>
         <form className="grid gap-4 bg-zinc-100 p-8 text-zinc-950">

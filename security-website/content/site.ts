@@ -24,9 +24,15 @@ export const company = {
   name: "Panter Özel Güvenlik ve Koruma Hizmetleri",
   shortName: "Panter",
   tagline: "Kurumsal alanlar, değerli varlıklar ve seçkin operasyonlar için profesyonel güvenlik.",
-  email: "info@panterguvenlik.com",
-  phone: "+90 (555) 000 00 00",
-  address: "Şirket adresi buraya eklenecek",
+  email: "info@panterguvenlik.com.tr",
+  emailHref: "mailto:info@panterguvenlik.com.tr",
+  gmailHref: "https://mail.google.com/mail/?view=cm&fs=1&to=info@panterguvenlik.com.tr",
+  phone: "532 516 0633",
+  phoneHref: "tel:+905325160633",
+  address: "Merkez, Mah. Bomonti Arkası Sk. Nida Park Bomonti C Blok No: 4 G, 34381 Şişli/İstanbul",
+  mapsHref:
+    "https://www.google.com/maps/search/?api=1&query=" +
+    encodeURIComponent("Merkez, Mah. Bomonti Arkası Sk. Nida Park Bomonti C Blok No: 4 G, 34381 Şişli/İstanbul"),
 };
 
 export const navItems = [
@@ -111,6 +117,64 @@ export const stats = [
   { value: "7/24", label: "Operasyon ve olay müdahalesi" },
   { value: "96%", label: "Hedef müşteri memnuniyeti" },
   { value: "120+", label: "Yıllık desteklenen lokasyon" },
+];
+
+export const securityPersonnelShowcase = [
+  {
+    image: "/operations/silahsiz-egitim.png",
+    title: "Güvenliklerimize silahsız özel eğitimden bir kare",
+    subtitle: "Panter ile güvendesiniz",
+  },
+  {
+    image: "/operations/silahli-egitim.png",
+    title: "Personellerimizin silahlı eğitimi",
+    subtitle: "Panter ile güvendesiniz",
+  },
+];
+
+export const technologyOperationsShowcase = [
+  {
+    image: "/operations/drone-devriye.png",
+    title: "Drone anti drone ile devriye",
+    subtitle: "Panter teknolojisi ile güvendesiniz",
+  },
+  {
+    image: "/operations/ai-kamera-izleme.png",
+    title: "Yapay zeka destekli kamera izleme sistemi ile riskleri önceden görüyoruz",
+    subtitle: "Panter ile güvendesiniz",
+  },
+];
+
+export const riskConsultingShowcase = [
+  {
+    image: "/operations/tesis-toplantisi.png",
+    title: "Güvenliğini sağladığımız tesisler hakkında toplantılar yapıyoruz",
+    subtitle: "Panter ile güvendesiniz",
+  },
+  {
+    image: "/operations/vip-koruma.png",
+    title: "Eğitimli silahlı VIP korumalarımız profesyonel şekilde çalışması",
+    subtitle: "Panter ile güvendesiniz",
+  },
+];
+
+export const projectReferences = [
+  {
+    name: "TAT Konakları Antalya",
+    image: "/references/tat-konaklari-antalya.png",
+  },
+  {
+    name: "Yeniköy Villası",
+    image: "/references/yenikoy-villasi.png",
+  },
+  {
+    name: "Demirevler Sitesi Üsküdar",
+    image: "/references/demirevler-sitesi-uskudar.png",
+  },
+  {
+    name: "Beykoz Konakları Kavacık",
+    image: "/references/beykoz-konaklari-kavacik.png",
+  },
 ];
 
 export const references = [
