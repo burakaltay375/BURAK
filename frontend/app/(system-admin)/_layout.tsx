@@ -38,11 +38,7 @@ export default function SystemAdminLayout() {
 
         <Tabs.Screen name="managers" options={{ title: "Manager", tabBarIcon: ({ color, size }) => <Ionicons name="people" color={color} size={size} /> }} />
 
-        <Tabs.Screen name="reservations" options={{ title: "Rezervasyon", tabBarIcon: ({ color, size }) => <Ionicons name="calendar" color={color} size={size} /> }} />
-
         <Tabs.Screen name="ai-knowledge" options={{ title: "AI Bilgi", tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" color={color} size={size} /> }} />
-
-        <Tabs.Screen name="identity" options={{ title: "Kimlik", tabBarIcon: ({ color, size }) => <Ionicons name="id-card" color={color} size={size} /> }} />
 
         <Tabs.Screen name="users" options={{ title: "Kullanıcı", tabBarIcon: ({ color, size }) => <Ionicons name="person" color={color} size={size} /> }} />
 

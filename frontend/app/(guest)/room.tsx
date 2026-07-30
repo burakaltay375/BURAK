@@ -2,16 +2,8 @@ import { useCallback, useState } from "react";
 import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
-import { api, Reservation, ReservationStatus, Room } from "@/src/api";
-import { formatTrDate } from "@/src/dates";
+import { api, Room } from "@/src/api";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
-
-const RESERVATION_STATUS_LABEL: Record<ReservationStatus, string> = {
-  pending: "Beklemede",
-  checked_in: "Otelde",
-  completed: "Tamamlandı",
-  cancelled: "İptal",
-};
 
 const ROOM_STATUS_LABEL: Record<Room["status"], string> = {
   available: "Boş",
@@ -23,20 +15,17 @@ const ROOM_STATUS_LABEL: Record<Room["status"], string> = {
 
 export default function GuestRoom() {
   const [room, setRoom] = useState<Room | null | undefined>(undefined);
-  const [reservations, setReservations] = useState<Reservation[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [r, res] = await Promise.all([api.myRoom(), api.myReservations()]);
+    const r = await api.myRoom();
     setRoom(r);
-    setReservations(res);
   }, []);
 
   useFocusEffect(useCallback(() => {
     load().catch((e) => {
       setErr(e.message);
       setRoom(null);
-      setReservations([]);
     });
   }, [load]));
 
@@ -48,7 +37,7 @@ export default function GuestRoom() {
     <SafeAreaView style={s.root} edges={["top"]} testID="guest-room-screen">
       <View style={s.header}>
         <Text style={s.title}>Odam</Text>
-        <Text style={s.sub}>Rezervasyon ve oda bilgileri</Text>
+        <Text style={s.sub}>Oda bilgileriniz</Text>
         {err && <Text style={s.err}>{err}</Text>}
       </View>
       <View style={s.card}>
@@ -57,14 +46,6 @@ export default function GuestRoom() {
         {room && <Text style={s.meta}>{room.room_type} · Kat {room.floor || "—"} · {room.capacity} kişi · {ROOM_STATUS_LABEL[room.status]}</Text>}
         {room && <Text style={s.meta}>₺{Math.round(room.price_per_night).toLocaleString("tr-TR")} / Gece</Text>}
       </View>
-      {reservations.map((r) => (
-        <View key={r.id} style={s.card} testID={`guest-reservation-${r.id}`}>
-          <Text style={s.label}>Rezervasyon</Text>
-          <Text style={s.value}>{RESERVATION_STATUS_LABEL[r.status]}</Text>
-          <Text style={s.meta}>{formatTrDate(r.check_in_date)} → {formatTrDate(r.check_out_date)}</Text>
-          {r.total_price !== null && r.total_price !== undefined && <Text style={s.meta}>Toplam: ₺{Math.round(r.total_price).toLocaleString("tr-TR")}</Text>}
-        </View>
-      ))}
     </SafeAreaView>
   );
 }

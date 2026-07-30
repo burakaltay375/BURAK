@@ -9,16 +9,6 @@ import { COLORS, DEPT_LABEL, RADIUS, SPACING, TYPE } from "@/src/theme";
 
 const DEPARTMENTS = Object.entries(DEPT_LABEL);
 
-function staffIdentityLabel(status?: string | null) {
-  if (status === "verified_by_hotel" || status === "approved" || status === "active_employee") return "Verified";
-  if (status === "rejected") return "Rejected";
-  if (status === "suspicious") return "Suspicious";
-  if (status === "needs_new_documents") return "New Documents Required";
-  if (status === "pending_review" || status === "in_review") return "Pending Manager Review";
-  if (status) return "Pending Verification";
-  return "Not Started";
-}
-
 export default function AdminStaff() {
   const [staff, setStaff] = useState<User[] | null>(null);
   const [form, setForm] = useState({
@@ -31,7 +21,6 @@ export default function AdminStaff() {
     nationality: "",
     country: "",
     region_city: "",
-    startIdentity: true,
   });
   const [editing, setEditing] = useState<User | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -67,13 +56,9 @@ export default function AdminStaff() {
         nationality: form.nationality.trim(),
         country: form.country.trim(),
         region_city: form.region_city.trim(),
-        start_identity_verification: form.startIdentity,
       });
-      setNotice(form.startIdentity
-        ? `${created.name} için kimlik doğrulaması başlatıldı. Çalışan onaylanana kadar pasif kalacak.`
-        : `${created.name} aktif çalışan olarak oluşturuldu.`
-      );
-      setForm((f) => ({ ...f, name: "", email: "", password: "", gender: "", birth_date: "", nationality: "", country: "", region_city: "", startIdentity: true }));
+      setNotice(`${created.name} çalışan olarak oluşturuldu.`);
+      setForm((f) => ({ ...f, name: "", email: "", password: "", gender: "", birth_date: "", nationality: "", country: "", region_city: "" }));
       await load();
     } catch (e: any) {
       setErr(e.message);
@@ -239,13 +224,6 @@ export default function AdminStaff() {
                   </Pressable>
                 ))}
               </View>
-              <Pressable onPress={() => setForm((f) => ({ ...f, startIdentity: !f.startIdentity }))} style={s.identityToggle} testID="staff-identity-toggle">
-                <Ionicons name={form.startIdentity ? "checkbox" : "square-outline"} size={22} color={form.startIdentity ? COLORS.brand : COLORS.onSurfaceTertiary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={s.identityTitle}>Kimlik doğrulamasını başlat</Text>
-                  <Text style={s.identitySub}>Çalışan oluşturulunca kimlik doğrulama kaydı açılır ve çalışan kendi belgelerini yükleyebilir.</Text>
-                </View>
-              </Pressable>
               <Pressable
                 testID="create-staff-button"
                 disabled={busy === "create"}
@@ -303,7 +281,6 @@ export default function AdminStaff() {
                     <Text style={s.detail}>Doğum: {item.birth_date || "—"} · Yaş: {item.age ?? "—"}</Text>
                     <Text style={s.detail}>Uyruk: {item.nationality || "—"}</Text>
                     <Text style={s.detail}>Konum: {[item.country, item.region_city].filter(Boolean).join(" / ") || "—"}</Text>
-                    <Text style={s.detail}>Kimlik: {staffIdentityLabel(item.identity_status)}</Text>
                   </View>
                   <View style={s.actions}>
                     <Pressable onPress={() => setEditing(item)} disabled={busy === item.id} style={s.actionBtn}>
@@ -345,9 +322,6 @@ const s = StyleSheet.create({
   chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   chipText: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
   chipTextActive: { color: COLORS.onBrandPrimary, fontWeight: "700" },
-  identityToggle: { flexDirection: "row", alignItems: "flex-start", gap: SPACING.sm, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, padding: SPACING.md },
-  identityTitle: { color: COLORS.onSurface, fontWeight: "800" },
-  identitySub: { color: COLORS.onSurfaceTertiary, fontSize: 12, lineHeight: 18, marginTop: 2 },
   primaryBtn: { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingVertical: SPACING.md, alignItems: "center" },
   primaryText: { color: COLORS.onBrandPrimary, fontWeight: "700" },
   disabled: { opacity: 0.65 },

@@ -201,7 +201,7 @@ export default function AdminRooms() {
                   </Pressable>
                 ))}
               </View>
-              <Text style={s.autoNote}>Oda durumu otomatik hesaplanır: boşsa yeşil, rezervasyon/check-in varsa kırmızı, housekeeping çağrısı varsa beyaz görünür.</Text>
+              <Text style={s.autoNote}>Oda durumu otomatik hesaplanır: boşsa yeşil, misafir check-in varsa kırmızı, housekeeping çağrısı varsa beyaz görünür.</Text>
               <Pressable onPress={() => setForm({ ...form, is_active: !form.is_active })} style={[s.activeToggle, form.is_active && s.activeToggleOn]}>
                 <Text style={[s.activeText, form.is_active && s.activeTextOn]}>{form.is_active ? "Aktif" : "Pasif"}</Text>
               </Pressable>

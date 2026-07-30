@@ -52,7 +52,7 @@ export default function Checkin() {
             <Text style={s.back}>‹ Geri</Text>
           </Pressable>
           <Text style={s.title}>Otele Giriş (Check-in)</Text>
-          <Text style={s.subtitle}>Rezervasyon kodunuzla hesabınızı aktive edin ve kendi şifrenizi belirleyin.</Text>
+          <Text style={s.subtitle}>Giriş kodunuzla hesabınızı aktive edin ve kendi şifrenizi belirleyin.</Text>
 
           {err && <Text style={s.err} testID="checkin-error">{err}</Text>}
 
@@ -60,7 +60,7 @@ export default function Checkin() {
             <TextInput testID="checkin-email-input" placeholder="E-posta" placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} style={s.fieldInput} />
           </Field>
           <Field icon="key">
-            <TextInput testID="checkin-code-input" placeholder="Rezervasyon Kodu" placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="characters" value={code} onChangeText={setCode} style={[s.fieldInput, { letterSpacing: 3, fontWeight: "700" }]} maxLength={8} />
+            <TextInput testID="checkin-code-input" placeholder="Giriş Kodu" placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="characters" value={code} onChangeText={setCode} style={[s.fieldInput, { letterSpacing: 3, fontWeight: "700" }]} maxLength={8} />
           </Field>
           <Field icon="lock-closed">
             <TextInput testID="checkin-password-input" placeholder="Yeni şifre (min 4)" placeholderTextColor={COLORS.onSurfaceTertiary} secureTextEntry value={password} onChangeText={setPassword} style={s.fieldInput} />

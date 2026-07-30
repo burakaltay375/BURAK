@@ -3,7 +3,7 @@ import { Alert, View, Text, StyleSheet, FlatList, Pressable, TextInput, Activity
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { api, Hotel, type HotelServices, Reservation, User } from "@/src/api";
+import { api, Hotel, type HotelServices, User } from "@/src/api";
 import { COLORS, SPACING, RADIUS, SERVICE_LABELS, TYPE } from "@/src/theme";
 
 const SERVICE_ENTRIES = Object.entries(SERVICE_LABELS);
@@ -12,23 +12,20 @@ export default function SystemHotels() {
   const [hotels, setHotels] = useState<Hotel[] | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [managers, setManagers] = useState<User[]>([]);
-  const [reservations, setReservations] = useState<Reservation[]>([]);
   const [form, setForm] = useState({ hotel_name: "", city: "", address: "" });
   const [editing, setEditing] = useState<{ id: string; hotel_name: string; city: string; address: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [h, u, m, r] = await Promise.all([
+    const [h, u, m] = await Promise.all([
       api.listHotels(),
       api.listUsers(),
       api.listManagers(),
-      api.listReservations(),
     ]);
     setHotels(h);
     setUsers(u);
     setManagers(m);
-    setReservations(r);
     setErr(null);
   }, []);
 
@@ -38,26 +35,25 @@ export default function SystemHotels() {
       setHotels([]);
       setUsers([]);
       setManagers([]);
-      setReservations([]);
     });
   }, [load]));
 
   const hotelStats = useMemo(() => {
-    const stats = new Map<string, { managers: string[]; userCount: number; reservationCount: number }>();
+    const stats = new Map<string, { managers: string[]; userCount: number; guestCount: number }>();
     for (const hotel of hotels ?? []) {
       const hotelUsers = users.filter((u) => (u.hotel_id ?? u.hotelId) === hotel.id);
       const hotelManagers = managers
         .filter((m) => (m.hotel_id ?? m.hotelId) === hotel.id)
         .map((m) => m.name);
-      const hotelReservations = reservations.filter((r) => r.hotel_id === hotel.id);
+      const guestCount = hotelUsers.filter((u) => u.role === "guest").length;
       stats.set(hotel.id, {
         managers: hotelManagers,
         userCount: hotelUsers.length,
-        reservationCount: hotelReservations.length,
+        guestCount,
       });
     }
     return stats;
-  }, [hotels, managers, reservations, users]);
+  }, [hotels, managers, users]);
 
   const createHotel = async () => {
     setErr(null);
@@ -196,7 +192,7 @@ export default function SystemHotels() {
                   <View style={s.summaryGrid}>
                     <Summary label="Manager" value={summary?.managers.join(", ") || "Atanmadı"} />
                     <Summary label="Kullanıcı" value={String(summary?.userCount ?? 0)} />
-                    <Summary label="Rezervasyon" value={String(summary?.reservationCount ?? 0)} />
+                    <Summary label="Misafir" value={String(summary?.guestCount ?? 0)} />
                   </View>
                   <View style={s.services}>
                     <Text style={s.servicesTitle}>Servisler</Text>

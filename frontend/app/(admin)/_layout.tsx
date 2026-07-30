@@ -34,15 +34,11 @@ export default function AdminLayout() {
 
         <Tabs.Screen name="dashboard" options={{ title: "Panel", tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart" color={color} size={size} /> }} />
 
-        <Tabs.Screen name="reservations" options={{ title: "Rezervasyon", tabBarIcon: ({ color, size }) => <Ionicons name="calendar" color={color} size={size} /> }} />
-
         <Tabs.Screen name="rooms" options={{ title: "Odalar", tabBarIcon: ({ color, size }) => <Ionicons name="bed" color={color} size={size} /> }} />
 
         <Tabs.Screen name="room-map" options={{ title: "Harita", tabBarIcon: ({ color, size }) => <Ionicons name="grid" color={color} size={size} /> }} />
 
         <Tabs.Screen name="ai-knowledge" options={{ title: "AI Bilgi", tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" color={color} size={size} /> }} />
-
-        <Tabs.Screen name="identity" options={{ title: "Kimlik", tabBarIcon: ({ color, size }) => <Ionicons name="id-card" color={color} size={size} /> }} />
 
         <Tabs.Screen name="all-requests" options={{ title: "Talepler", tabBarIcon: ({ color, size }) => <Ionicons name="albums" color={color} size={size} /> }} />
 

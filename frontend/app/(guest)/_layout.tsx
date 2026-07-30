@@ -48,13 +48,6 @@ export default function GuestLayout() {
           }}
         />
         <Tabs.Screen
-          name="identity"
-          options={{
-            title: "Kimlik",
-            tabBarIcon: ({ color, size }) => <Ionicons name="id-card" color={color} size={size} />,
-          }}
-        />
-        <Tabs.Screen
           name="profile"
           options={{
             title: "Profil",

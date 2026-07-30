@@ -140,13 +140,9 @@ export default function Login() {
             <View style={s.divider}><View style={s.dividerLine} /><Text style={s.dividerText}>veya</Text><View style={s.dividerLine} /></View>
 
             <View style={s.publicRow}>
-              <Pressable testID="goto-reserve-button" onPress={() => router.push("/reserve")} style={s.publicBtn}>
-                <Text style={s.publicBtnTitle}>Rezervasyon Yap</Text>
-                <Text style={s.publicBtnSub}>Şifresiz · 30 saniye</Text>
-              </Pressable>
               <Pressable testID="goto-checkin-button" onPress={() => router.push("/checkin")} style={s.publicBtn}>
                 <Text style={s.publicBtnTitle}>Otele Giriş</Text>
-                <Text style={s.publicBtnSub}>Rezervasyon kodu ile</Text>
+                <Text style={s.publicBtnSub}>Giriş kodu ile hesabınızı aktive edin</Text>
               </Pressable>
             </View>
 
