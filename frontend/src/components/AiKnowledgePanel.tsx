@@ -3,8 +3,8 @@ import { Ionicons } from "@expo/vector-icons";
 import type { HotelAiKnowledgeInput } from "@/src/api";
 import { COLORS, RADIUS, SPACING, TYPE } from "@/src/theme";
 
-type SectionKey = "general_info";
-type ListKey = "events" | "nearby_places" | "paid_services";
+type SectionKey = "hotel_info" | "rooms" | "restaurant" | "services" | "policies" | "general_info";
+type ListKey = "events" | "nearby_places" | "paid_services" | "custom_entries";
 
 type Props = {
   value: HotelAiKnowledgeInput;
@@ -14,10 +14,96 @@ type Props = {
 
 const SECTIONS: { key: SectionKey; title: string; fields: { key: string; label: string; multiline?: boolean }[] }[] = [
   {
-    key: "general_info",
-    title: "Tüm Bilgiler",
+    key: "hotel_info",
+    title: "Genel Otel Bilgileri",
     fields: [
-      { key: "all_information", label: "Otel hakkında tüm bilgiler", multiline: true },
+      { key: "hotel_name", label: "Otel adı" },
+      { key: "general_information", label: "Genel otel bilgileri", multiline: true },
+      { key: "description", label: "Otel açıklaması", multiline: true },
+      { key: "address", label: "Adres" },
+      { key: "phone", label: "Telefon" },
+      { key: "email", label: "E-posta" },
+      { key: "website", label: "Web sitesi" },
+      { key: "star_rating", label: "Yıldız bilgisi" },
+      { key: "check_in_time", label: "Check-in saati" },
+      { key: "check_out_time", label: "Check-out saati" },
+      { key: "emergency_information", label: "Acil durum bilgileri", multiline: true },
+    ],
+  },
+  {
+    key: "rooms",
+    title: "Oda Bilgileri ve Kuralları",
+    fields: [
+      { key: "room_types", label: "Oda tipleri", multiline: true },
+      { key: "room_features", label: "Oda özellikleri", multiline: true },
+      { key: "room_rules", label: "Oda kuralları", multiline: true },
+      { key: "extra_bed_rules", label: "Ekstra yatak kuralları", multiline: true },
+      { key: "baby_bed_rules", label: "Bebek yatağı kuralları", multiline: true },
+      { key: "balcony", label: "Balkon bilgisi" },
+      { key: "sea_view", label: "Manzara bilgisi" },
+      { key: "air_conditioning", label: "Klima bilgisi" },
+      { key: "mini_bar", label: "Mini bar bilgisi" },
+      { key: "safe", label: "Kasa bilgisi" },
+      { key: "tv", label: "TV bilgisi" },
+      { key: "coffee_machine", label: "Kahve makinesi bilgisi" },
+    ],
+  },
+  {
+    key: "restaurant",
+    title: "Restoran, Bar ve Oda Servisi",
+    fields: [
+      { key: "restaurant_hours", label: "Restoran çalışma saatleri" },
+      { key: "breakfast_hours", label: "Kahvaltı saatleri" },
+      { key: "breakfast_content", label: "Kahvaltı içeriği", multiline: true },
+      { key: "lunch_hours", label: "Öğle yemeği saatleri" },
+      { key: "dinner_hours", label: "Akşam yemeği saatleri" },
+      { key: "restaurant_menu", label: "Restoran menüsü ve fiyatları", multiline: true },
+      { key: "bar_menu", label: "Bar menüsü ve fiyatları", multiline: true },
+      { key: "room_service_hours", label: "Oda servisi saatleri" },
+      { key: "room_service_fees", label: "Oda servisi ücretleri", multiline: true },
+      { key: "room_service_rules", label: "Oda servisi kuralları", multiline: true },
+    ],
+  },
+  {
+    key: "services",
+    title: "Otel Hizmetleri",
+    fields: [
+      { key: "wifi", label: "Wi-Fi bilgileri", multiline: true },
+      { key: "parking", label: "Otopark bilgileri", multiline: true },
+      { key: "swimming_pool", label: "Havuz çalışma saatleri" },
+      { key: "pool_rules", label: "Havuz kuralları", multiline: true },
+      { key: "spa", label: "Spa kuralları ve saatleri", multiline: true },
+      { key: "sauna", label: "Sauna kuralları ve saatleri", multiline: true },
+      { key: "gym", label: "Spor salonu kuralları ve saatleri", multiline: true },
+      { key: "valet", label: "Vale hizmeti ve ücretleri", multiline: true },
+      { key: "housekeeping", label: "Housekeeping saatleri ve kuralları", multiline: true },
+      { key: "vip_services", label: "VIP hizmetleri", multiline: true },
+      { key: "laundry", label: "Çamaşırhane bilgileri", multiline: true },
+      { key: "airport_transfer", label: "Havalimanı transferi", multiline: true },
+    ],
+  },
+  {
+    key: "policies",
+    title: "Otel Politikaları",
+    fields: [
+      { key: "early_check_in", label: "Erken giriş kuralları", multiline: true },
+      { key: "late_check_out", label: "Geç çıkış kuralları", multiline: true },
+      { key: "pet_rules", label: "Evcil hayvan kuralları", multiline: true },
+      { key: "smoking_policy", label: "Sigara içme kuralları", multiline: true },
+      { key: "child_policy", label: "Çocuk politikası", multiline: true },
+      { key: "payment_methods", label: "Ödeme yöntemleri", multiline: true },
+      { key: "cancellation_policy", label: "İptal politikası", multiline: true },
+      { key: "refund_policy", label: "İade politikası", multiline: true },
+      { key: "deposit_rules", label: "Depozito kuralları", multiline: true },
+      { key: "guest_request_rules", label: "Misafir talepleriyle ilgili kurallar", multiline: true },
+      { key: "special_rules", label: "Otelin özel kuralları", multiline: true },
+    ],
+  },
+  {
+    key: "general_info",
+    title: "Serbest Metin Bilgiler",
+    fields: [
+      { key: "all_information", label: "Manager'ın eklemek istediği diğer bilgiler", multiline: true },
     ],
   },
 ];
@@ -53,6 +139,15 @@ const LISTS: { key: ListKey; title: string; empty: string; fields: { key: string
       { key: "is_paid", label: "Ücretli mi? (evet/hayır)" },
       { key: "price", label: "Ücret / fiyat" },
       { key: "description", label: "Açıklama", multiline: true },
+    ],
+  },
+  {
+    key: "custom_entries",
+    title: "Özel Bilgi / Kural Ekle",
+    empty: "Henüz özel bilgi veya kural eklenmedi",
+    fields: [
+      { key: "title", label: "Başlık" },
+      { key: "content", label: "Bilgi / kural", multiline: true },
     ],
   },
 ];

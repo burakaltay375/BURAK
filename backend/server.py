@@ -14,16 +14,22 @@ import logging
 import asyncio
 import tempfile
 import re
+import struct
 import string
 import secrets
 import base64
+import time
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Literal
 
 import bcrypt
 import jwt as pyjwt
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query, status
+import requests
+from openpyxl import Workbook
+from bson.binary import Binary
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
@@ -31,6 +37,19 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 
 from dotenv import load_dotenv
+from services.openai_reception import (
+    ReceptionAIError,
+    adapt_reception_tone,
+    ask_reception_ai,
+    missing_details_reply,
+    needs_request_details,
+    recognize_intent,
+    recognize_tone,
+)
+from services.reservation_referrals import (
+    ensure_indexes as ensure_reservation_referral_indexes,
+    register_routes as register_reservation_referral_routes,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -41,6 +60,10 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
+OSM_USER_AGENT = os.environ.get(
+    "OSM_USER_AGENT",
+    "Hospira/1.0 (https://github.com/burakaltay375/BURAK)",
+)
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24 * 7
 
@@ -55,6 +78,18 @@ db = client[DB_NAME]
 # --------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("hotel-ops")
+
+OVERPASS_URLS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+)
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+MAP_CACHE_TTL_SECONDS = 300
+GEOCODE_CACHE_TTL_SECONDS = 86400
+_nearby_cache: Dict[tuple, tuple[float, List[dict]]] = {}
+_geocode_cache: Dict[str, tuple[float, List[dict]]] = {}
+_nominatim_lock = asyncio.Lock()
+_nominatim_last_request = 0.0
 
 # --------------------------------------------------------------------------
 # App
@@ -162,6 +197,21 @@ LEGACY_SYSTEM_ADMIN_EMAIL = "burakaltay3004"
 SYSTEM_ADMIN_PASSWORD_FROM_ENV = "SYSTEM_ADMIN_PASSWORD" in os.environ
 SYSTEM_ADMIN_PASSWORD = os.environ.get("SYSTEM_ADMIN_PASSWORD", "")
 DEFAULT_HOTEL_ID = "default-hotel"
+HOTEL_MAP_DEFAULTS: Dict[str, tuple[float, float]] = {
+    DEFAULT_HOTEL_ID: (41.0082, 28.9784),
+    "hotel-aurastay-grand-istanbul": (41.0524, 28.9928),
+    "hotel-bosphorus-elite": (41.0438, 29.0153),
+    "hotel-blue-horizon-resort": (37.1060, 27.2940),
+    "hotel-cappadocia-cave-suites": (38.6431, 34.8289),
+    "hotel-antalya-beach-palace": (36.8563, 30.7866),
+}
+CITY_MAP_DEFAULTS: Dict[str, tuple[float, float]] = {
+    "istanbul": (41.0082, 28.9784),
+    "bodrum": (37.0344, 27.4305),
+    "nevşehir": (38.6244, 34.7142),
+    "nevsehir": (38.6244, 34.7142),
+    "antalya": (36.8969, 30.7133),
+}
 Role = Literal["system_admin", "hotel_manager", "staff", "guest"]
 GuestType = Literal["standard", "vip", "casino"]
 RoomStatus = Literal["available", "reserved", "occupied", "cleaning", "maintenance"]
@@ -199,6 +249,7 @@ class UserPublic(BaseModel):
     name: str
     role: Role
     department: Optional[str] = None
+    position: Optional[str] = None
     room_no: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
@@ -239,6 +290,18 @@ class ChatOut(BaseModel):
     request_id: Optional[str] = None
     parsed: Optional[Dict[str, Any]] = None
 
+class ReceptionHistoryMessageIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+class ReceptionChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: List[ReceptionHistoryMessageIn] = Field(default_factory=list, max_length=20)
+
+class ReceptionChatOut(BaseModel):
+    reply: str
+    model: str
+
 class RequestOut(BaseModel):
     id: str
     guest_id: str
@@ -271,6 +334,9 @@ class HotelCreateIn(BaseModel):
     hotel_name: str
     city: str
     address: Optional[str] = None
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    reservation_url: Optional[str] = None
     active: bool = True
 
 class HotelOut(BaseModel):
@@ -278,21 +344,59 @@ class HotelOut(BaseModel):
     hotel_name: str
     city: str
     address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    reservation_url: Optional[str] = None
     active: bool = True
     manager_id: Optional[str] = None
     services: Dict[str, bool] = Field(default_factory=dict)
+    logo_url: Optional[str] = None
+    intro_video_url: Optional[str] = None
+    intro_video_duration: Optional[float] = None
     created_at: str
 
 class HotelUpdateIn(BaseModel):
     hotel_name: Optional[str] = None
     city: Optional[str] = None
     address: Optional[str] = None
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    reservation_url: Optional[str] = None
     active: Optional[bool] = None
     services: Optional[Dict[str, bool]] = None
+
+class HotelMapConfigOut(BaseModel):
+    hotel_id: str
+    hotel_name: str
+    address: Optional[str] = None
+    latitude: float
+    longitude: float
+
+class GpsCoordinatesOut(BaseModel):
+    latitude: float
+    longitude: float
+
+class NearbyPlaceOut(BaseModel):
+    id: str
+    title: str
+    address: Optional[str] = None
+    rating: Optional[float] = None
+    reviews: Optional[int] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    open_state: Optional[str] = None
+    thumbnail: Optional[str] = None
+    gps_coordinates: GpsCoordinatesOut
+
+class GeocodeResultOut(BaseModel):
+    display_name: str
+    latitude: float
+    longitude: float
 
 class HotelInfoKnowledge(BaseModel):
     hotel_name: Optional[str] = None
     description: Optional[str] = None
+    general_information: Optional[str] = None
     address: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -300,29 +404,42 @@ class HotelInfoKnowledge(BaseModel):
     star_rating: Optional[str] = None
     check_in_time: Optional[str] = None
     check_out_time: Optional[str] = None
+    emergency_information: Optional[str] = None
 
 class HotelServicesKnowledge(BaseModel):
     wifi: Optional[str] = None
     parking: Optional[str] = None
     swimming_pool: Optional[str] = None
+    pool_rules: Optional[str] = None
     spa: Optional[str] = None
     sauna: Optional[str] = None
     gym: Optional[str] = None
     laundry: Optional[str] = None
     airport_transfer: Optional[str] = None
     room_service: Optional[str] = None
+    valet: Optional[str] = None
+    housekeeping: Optional[str] = None
+    vip_services: Optional[str] = None
     pet_policy: Optional[str] = None
 
 class RestaurantKnowledge(BaseModel):
+    restaurant_hours: Optional[str] = None
     breakfast_hours: Optional[str] = None
+    breakfast_content: Optional[str] = None
     lunch_hours: Optional[str] = None
     dinner_hours: Optional[str] = None
     restaurant_menu: Optional[str] = None
+    bar_menu: Optional[str] = None
     room_service_hours: Optional[str] = None
+    room_service_fees: Optional[str] = None
+    room_service_rules: Optional[str] = None
 
 class RoomKnowledge(BaseModel):
     room_types: Optional[str] = None
     room_features: Optional[str] = None
+    room_rules: Optional[str] = None
+    extra_bed_rules: Optional[str] = None
+    baby_bed_rules: Optional[str] = None
     balcony: Optional[str] = None
     sea_view: Optional[str] = None
     air_conditioning: Optional[str] = None
@@ -334,10 +451,15 @@ class RoomKnowledge(BaseModel):
 class PolicyKnowledge(BaseModel):
     smoking_policy: Optional[str] = None
     cancellation_policy: Optional[str] = None
+    refund_policy: Optional[str] = None
     child_policy: Optional[str] = None
     early_check_in: Optional[str] = None
     late_check_out: Optional[str] = None
     pet_rules: Optional[str] = None
+    payment_methods: Optional[str] = None
+    deposit_rules: Optional[str] = None
+    guest_request_rules: Optional[str] = None
+    special_rules: Optional[str] = None
 
 class NearbyPlace(BaseModel):
     id: Optional[str] = None
@@ -414,15 +536,17 @@ class StaffCreateIn(BaseModel):
     password: str
     name: str
     department: str
-    gender: str
-    birth_date: str
-    nationality: str
-    country: str
-    region_city: str
+    position: Optional[str] = None
+    gender: Optional[str] = None
+    birth_date: Optional[str] = None
+    nationality: Optional[str] = None
+    country: Optional[str] = None
+    region_city: Optional[str] = None
 
 class StaffUpdateIn(BaseModel):
     name: Optional[str] = None
     department: Optional[str] = None
+    position: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
     nationality: Optional[str] = None
@@ -449,6 +573,7 @@ class UserAdminOut(BaseModel):
     name: str
     role: Role
     department: Optional[str] = None
+    position: Optional[str] = None
     room_no: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
@@ -460,6 +585,45 @@ class UserAdminOut(BaseModel):
     hotelId: Optional[str] = None
     guest_type: Optional[GuestType] = None
     active: bool = True
+
+
+ScheduleStatus = Literal["Draft", "Approved"]
+
+
+class DepartmentScheduleIn(BaseModel):
+    employee_id: str
+    department: Optional[str] = None
+    date: str
+    start_time: str
+    end_time: str
+    task: str
+
+
+class DepartmentScheduleUpdateIn(BaseModel):
+    employee_id: Optional[str] = None
+    department: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    task: Optional[str] = None
+
+
+class DepartmentScheduleOut(BaseModel):
+    id: str
+    employee_id: str
+    employee_name: str
+    department: str
+    position: Optional[str] = None
+    date: str
+    start_time: str
+    end_time: str
+    task: str
+    status: ScheduleStatus
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
 
 
 class PanterAdminRequestIn(BaseModel):
@@ -861,7 +1025,7 @@ def public_user(u: dict) -> UserPublic:
     hid = u.get("hotelId") or u.get("hotel_id")
     return UserPublic(
         id=u["id"], email=u["email"], name=u["name"], role=role_of(u),
-        department=u.get("department"), room_no=u.get("room_no"),
+        department=u.get("department"), position=u.get("position"), room_no=u.get("room_no"),
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
         hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
@@ -872,7 +1036,7 @@ def public_admin_user(u: dict) -> UserAdminOut:
     hid = u.get("hotelId") or u.get("hotel_id")
     return UserAdminOut(
         id=u["id"], email=u["email"], name=u["name"], role=role_of(u),
-        department=u.get("department"), room_no=u.get("room_no"),
+        department=u.get("department"), position=u.get("position"), room_no=u.get("room_no"),
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
         hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
@@ -892,12 +1056,177 @@ def public_request(r: dict) -> RequestOut:
     )
 
 def public_hotel(h: dict) -> "HotelOut":
+    branding = h.get("branding") if isinstance(h.get("branding"), dict) else {}
+    logo = branding.get("logo") if isinstance(branding.get("logo"), dict) else None
+    intro = branding.get("intro") if isinstance(branding.get("intro"), dict) else None
     return HotelOut(
         id=h["id"], hotel_name=h["hotel_name"], city=h["city"],
-        address=h.get("address"), active=h.get("active", True),
+        address=h.get("address"), latitude=h.get("latitude"), longitude=h.get("longitude"),
+        reservation_url=h.get("reservation_url"),
+        active=h.get("active", True),
         manager_id=h.get("manager_id"), services=normalize_services(h.get("services")),
+        logo_url=f"/api/hotels/{h['id']}/branding/logo?v={logo.get('updated_at')}" if logo else None,
+        intro_video_url=f"/api/hotels/{h['id']}/branding/intro?v={intro.get('updated_at')}" if intro else None,
+        intro_video_duration=intro.get("duration") if intro else None,
         created_at=h["created_at"],
     )
+
+
+def validate_hotel_reservation_settings(update: dict) -> dict:
+    if update.get("reservation_url"):
+        url = str(update["reservation_url"]).strip()
+        if not url.lower().startswith("https://"):
+            raise HTTPException(400, "Resmi rezervasyon bağlantısı HTTPS olmalı")
+        update["reservation_url"] = url
+    return update
+
+
+BRANDING_LOGO_MIMES = {"image/png", "image/jpeg", "image/webp"}
+BRANDING_VIDEO_MIMES = {"video/mp4": ".mp4", "video/webm": ".webm"}
+BRANDING_LOGO_MAX_BYTES = 4 * 1024 * 1024
+BRANDING_VIDEO_MAX_BYTES = 14 * 1024 * 1024
+
+
+async def read_upload_limited(file: UploadFile, max_bytes: int) -> bytes:
+    data = await file.read(max_bytes + 1)
+    if not data:
+        raise HTTPException(400, "Yüklenen dosya boş")
+    if len(data) > max_bytes:
+        raise HTTPException(400, f"Dosya çok büyük (maksimum {max_bytes // (1024 * 1024)} MB)")
+    return data
+
+
+async def validate_branding_logo(file: UploadFile) -> tuple[bytes, str, str]:
+    mime_type = (file.content_type or "").lower().replace("image/jpg", "image/jpeg")
+    if mime_type not in BRANDING_LOGO_MIMES:
+        raise HTTPException(400, "Logo yalnızca PNG, JPG veya WEBP olabilir")
+    data = await read_upload_limited(file, BRANDING_LOGO_MAX_BYTES)
+    valid_signature = {
+        "image/png": data.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg": data.startswith(b"\xff\xd8\xff"),
+        "image/webp": data.startswith(b"RIFF") and data[8:12] == b"WEBP",
+    }[mime_type]
+    if not valid_signature:
+        raise HTTPException(400, "Logo dosya içeriği ile türü uyuşmuyor")
+    return data, mime_type, Path(file.filename or "logo").name
+
+
+def mp4_duration_seconds(data: bytes) -> float:
+    marker = data.find(b"mvhd")
+    if marker < 0:
+        return 0
+    version = data[marker + 4] if marker + 4 < len(data) else -1
+    if version == 0 and marker + 24 <= len(data):
+        timescale = int.from_bytes(data[marker + 16:marker + 20], "big")
+        duration = int.from_bytes(data[marker + 20:marker + 24], "big")
+    elif version == 1 and marker + 40 <= len(data):
+        timescale = int.from_bytes(data[marker + 28:marker + 32], "big")
+        duration = int.from_bytes(data[marker + 32:marker + 40], "big")
+    else:
+        return 0
+    return duration / timescale if timescale else 0
+
+
+def ebml_value(data: bytes, element_id: bytes) -> Optional[bytes]:
+    marker = data.find(element_id)
+    if marker < 0:
+        return None
+    offset = marker + len(element_id)
+    if offset >= len(data):
+        return None
+    first = data[offset]
+    mask, size_length = 0x80, 1
+    while size_length <= 8 and not first & mask:
+        mask >>= 1
+        size_length += 1
+    if size_length > 8 or offset + size_length > len(data):
+        return None
+    size = first & (mask - 1)
+    for byte in data[offset + 1:offset + size_length]:
+        size = (size << 8) | byte
+    start = offset + size_length
+    end = start + size
+    return data[start:end] if end <= len(data) else None
+
+
+def webm_duration_seconds(data: bytes) -> float:
+    duration_bytes = ebml_value(data, b"\x44\x89")
+    if not duration_bytes or len(duration_bytes) not in (4, 8):
+        return 0
+    duration = struct.unpack(">f" if len(duration_bytes) == 4 else ">d", duration_bytes)[0]
+    scale_bytes = ebml_value(data, b"\x2a\xd7\xb1")
+    scale = int.from_bytes(scale_bytes, "big") if scale_bytes else 1_000_000
+    return duration * scale / 1_000_000_000
+
+
+async def validate_branding_intro(file: UploadFile) -> tuple[bytes, str, str, float]:
+    mime_type = (file.content_type or "").lower()
+    if mime_type not in BRANDING_VIDEO_MIMES:
+        raise HTTPException(400, "Jenerik yalnızca MP4 veya WEBM olabilir")
+    data = await read_upload_limited(file, BRANDING_VIDEO_MAX_BYTES)
+    if mime_type == "video/mp4" and b"ftyp" not in data[:32]:
+        raise HTTPException(400, "Geçerli bir MP4 dosyası yükleyin")
+    if mime_type == "video/webm" and not data.startswith(b"\x1aE\xdf\xa3"):
+        raise HTTPException(400, "Geçerli bir WEBM dosyası yükleyin")
+    suffix = BRANDING_VIDEO_MIMES[mime_type]
+    duration = mp4_duration_seconds(data) if mime_type == "video/mp4" else webm_duration_seconds(data)
+    if duration <= 0:
+        raise HTTPException(400, "Jenerik süresi okunamadı")
+    if duration > 300:
+        raise HTTPException(400, "Jenerik en fazla 5 dakika olabilir")
+    return data, mime_type, Path(file.filename or f"intro{suffix}").name, round(duration, 2)
+
+
+async def upsert_branding_media(
+    hotel_id: str,
+    asset_type: Literal["logo", "intro"],
+    data: bytes,
+    mime_type: str,
+    file_name: str,
+    updated_by: str,
+    duration: Optional[float] = None,
+) -> None:
+    timestamp = now_iso()
+    await db.hotel_branding_media.update_one(
+        {"hotel_id": hotel_id, "asset_type": asset_type},
+        {"$set": {
+            "id": str(uuid.uuid4()),
+            "hotel_id": hotel_id,
+            "asset_type": asset_type,
+            "content": Binary(data),
+            "mime_type": mime_type,
+            "file_name": file_name,
+            "size_bytes": len(data),
+            "duration": duration,
+            "updated_by": updated_by,
+            "updated_at": timestamp,
+        }},
+        upsert=True,
+    )
+    metadata = {
+        "mime_type": mime_type,
+        "file_name": file_name,
+        "duration": duration,
+        "updated_at": timestamp,
+    }
+    await db.hotels.update_one({"id": hotel_id}, {"$set": {f"branding.{asset_type}": metadata}})
+
+
+async def delete_branding_media(hotel_id: str, asset_type: Literal["logo", "intro"]) -> None:
+    await db.hotel_branding_media.delete_one({"hotel_id": hotel_id, "asset_type": asset_type})
+    await db.hotels.update_one({"id": hotel_id}, {"$unset": {f"branding.{asset_type}": ""}})
+
+
+def hotel_map_coordinates(hotel: dict) -> tuple[float, float]:
+    latitude = hotel.get("latitude")
+    longitude = hotel.get("longitude")
+    if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+        return float(latitude), float(longitude)
+    hotel_id = str(hotel.get("id") or "")
+    if hotel_id in HOTEL_MAP_DEFAULTS:
+        return HOTEL_MAP_DEFAULTS[hotel_id]
+    city = str(hotel.get("city") or "").strip().casefold()
+    return CITY_MAP_DEFAULTS.get(city, HOTEL_MAP_DEFAULTS[DEFAULT_HOTEL_ID])
 
 async def ensure_active_hotel_or_none(hotel_id: Optional[str]) -> Optional[dict]:
     hid = (hotel_id or "").strip()
@@ -1101,8 +1430,19 @@ def is_hotel_info_question(text: str) -> bool:
         "adres", "address", "telefon", "phone", "email", "website", "yakın", "nearby",
         "eczane", "pharmacy", "plaj", "beach", "airport", "havaliman", "hospital", "hastane",
         "oda tipi", "room type", "balkon", "sea view", "deniz", "mini bar", "kasa", "tv",
+        "oda kural", "ekstra yatak", "bebek yata", "vale", "housekeeping", "temizlik saat",
+        "vip", "ödeme", "odeme", "iade", "refund", "depozito", "deposit", "acil", "emergency",
+        "misafir talep", "özel kural", "ozel kural", "bar",
     ]
     return any(keyword in lowered for keyword in keywords)
+
+
+def _knowledge_fields(doc: dict, section: str, *keys: str) -> str:
+    source = doc.get(section) if isinstance(doc.get(section), dict) else {}
+    return "\n".join(
+        text for text in (_clean_string(source.get(key)) for key in keys) if text
+    )
+
 
 def knowledge_answer(message: str, knowledge_doc: Optional[dict]) -> Optional[str]:
     if not knowledge_doc or not ai_knowledge_has_content(knowledge_doc):
@@ -1116,18 +1456,31 @@ def knowledge_answer(message: str, knowledge_doc: Optional[dict]) -> Optional[st
                 rendered.append(text)
         if rendered:
             return "Otel içi etkinlikler ve saatleri: " + "; ".join(rendered)
-    if any(k in lowered for k in ["ücret", "ucret", "fiyat", "kaç para", "kac para", "ücretsiz", "ucretsiz", "paid", "free", "hizmet"]):
+    price_terms = ["ücret", "ucret", "fiyat", "kaç para", "kac para", "ücretsiz", "ucretsiz", "paid", "free"]
+    full_list_terms = ["tüm hizmet", "tum hizmet", "fiyat listesi", "tüm fiyat", "tum fiyat", "bütün fiyat", "butun fiyat"]
+    if any(k in lowered for k in price_terms + full_list_terms):
+        show_all = any(k in lowered for k in full_list_terms)
         rendered = []
         for service in knowledge_doc.get("paid_services") or []:
             name = _clean_string(service.get("name"))
             if not name:
+                continue
+            name_lower = name.lower()
+            name_tokens = [
+                token for token in re.findall(r"\w+", name_lower)
+                if len(token) > 2 and token not in {"hizmet", "servis", "otel"}
+            ]
+            if not show_all and name_lower not in lowered and not any(token in lowered for token in name_tokens):
                 continue
             paid = "ücretli" if service.get("is_paid") else "ücretsiz"
             price = _clean_string(service.get("price"))
             desc = _clean_string(service.get("description"))
             rendered.append(" - ".join([bit for bit in [name, paid, price, desc] if bit]))
         if rendered:
-            return "Otel içi hizmet ücretleri: " + "; ".join(rendered)
+            prefix = "Otel içi hizmet ücretleri: " if show_all else ""
+            return prefix + "; ".join(rendered)
+        if not show_all:
+            return "Elbette yardımcı olayım. Hangi hizmetin fiyatını öğrenmek istiyorsunuz?"
     if any(k in lowered for k in ["yakın", "yakin", "nearby", "en yakın", "en yakin", "nerede", "çevre", "cevre"]):
         rendered = []
         for place in knowledge_doc.get("nearby_places") or []:
@@ -1148,33 +1501,46 @@ def knowledge_answer(message: str, knowledge_doc: Optional[dict]) -> Optional[st
     if faq_hits:
         return faq_hits[0]
     field_groups = [
-        ("breakfast", ["kahvalt", "breakfast"], knowledge_doc.get("restaurant", {}).get("breakfast_hours")),
+        ("restaurant", ["restoran", "restaurant"], knowledge_doc.get("restaurant", {}).get("restaurant_hours")),
+        ("breakfast", ["kahvalt", "breakfast"], _knowledge_fields(knowledge_doc, "restaurant", "breakfast_hours", "breakfast_content")),
         ("lunch", ["öğle", "ogle", "lunch"], knowledge_doc.get("restaurant", {}).get("lunch_hours")),
         ("dinner", ["akşam", "aksam", "dinner"], knowledge_doc.get("restaurant", {}).get("dinner_hours")),
-        ("menu", ["menü", "menu"], knowledge_doc.get("restaurant", {}).get("restaurant_menu")),
-        ("room service", ["oda servisi", "room service"], knowledge_doc.get("restaurant", {}).get("room_service_hours") or knowledge_doc.get("services", {}).get("room_service")),
+        ("bar", ["bar"], knowledge_doc.get("restaurant", {}).get("bar_menu")),
+        ("menu", ["menü", "menu"], _knowledge_fields(knowledge_doc, "restaurant", "restaurant_hours", "restaurant_menu")),
+        ("room service", ["oda servisi", "room service"], _knowledge_fields(knowledge_doc, "restaurant", "room_service_hours", "room_service_fees", "room_service_rules") or knowledge_doc.get("services", {}).get("room_service")),
         ("wifi", ["wifi", "wi-fi", "internet"], knowledge_doc.get("services", {}).get("wifi")),
         ("parking", ["otopark", "parking", "park"], knowledge_doc.get("services", {}).get("parking")),
-        ("pool", ["havuz", "pool"], knowledge_doc.get("services", {}).get("swimming_pool")),
+        ("pool", ["havuz", "pool"], _knowledge_fields(knowledge_doc, "services", "swimming_pool", "pool_rules")),
         ("spa", ["spa"], knowledge_doc.get("services", {}).get("spa")),
         ("sauna", ["sauna"], knowledge_doc.get("services", {}).get("sauna")),
         ("gym", ["gym", "fitness", "spor"], knowledge_doc.get("services", {}).get("gym")),
+        ("valet", ["vale", "valet"], knowledge_doc.get("services", {}).get("valet")),
+        ("housekeeping", ["housekeeping", "temizlik saat", "oda temiz"], knowledge_doc.get("services", {}).get("housekeeping")),
+        ("vip", ["vip"], knowledge_doc.get("services", {}).get("vip_services")),
         ("laundry", ["laundry", "çamaşır", "camasir", "kuru temizleme"], knowledge_doc.get("services", {}).get("laundry")),
         ("airport transfer", ["airport", "havaliman", "transfer"], knowledge_doc.get("services", {}).get("airport_transfer")),
         ("pet", ["pet", "evcil", "hayvan"], knowledge_doc.get("services", {}).get("pet_policy") or knowledge_doc.get("policies", {}).get("pet_rules")),
         ("smoking", ["sigara", "smoking"], knowledge_doc.get("policies", {}).get("smoking_policy")),
-        ("cancellation", ["iptal", "cancellation"], knowledge_doc.get("policies", {}).get("cancellation_policy")),
+        ("cancellation", ["iptal", "cancellation", "iade", "refund"], _knowledge_fields(knowledge_doc, "policies", "cancellation_policy", "refund_policy")),
         ("children", ["çocuk", "cocuk", "child"], knowledge_doc.get("policies", {}).get("child_policy")),
         ("early checkin", ["erken giriş", "erken giris", "early check"], knowledge_doc.get("policies", {}).get("early_check_in")),
-        ("late checkout", ["geç çıkış", "gec cikis", "late check"], knowledge_doc.get("policies", {}).get("late_check_out")),
+        ("late checkout", ["geç çıkış", "gec cikis", "geç checkout", "gec checkout", "late check"], knowledge_doc.get("policies", {}).get("late_check_out")),
+        ("payment", ["ödeme", "odeme", "payment"], knowledge_doc.get("policies", {}).get("payment_methods")),
+        ("deposit", ["depozito", "deposit"], knowledge_doc.get("policies", {}).get("deposit_rules")),
+        ("guest requests", ["misafir talep", "guest request"], knowledge_doc.get("policies", {}).get("guest_request_rules")),
         ("checkin", ["check-in", "check in", "giriş", "giris"], knowledge_doc.get("hotel_info", {}).get("check_in_time")),
         ("checkout", ["check-out", "check out", "çıkış", "cikis"], knowledge_doc.get("hotel_info", {}).get("check_out_time")),
+        ("emergency", ["acil", "emergency"], knowledge_doc.get("hotel_info", {}).get("emergency_information")),
         ("address", ["adres", "address", "nerede"], knowledge_doc.get("hotel_info", {}).get("address")),
         ("phone", ["telefon", "phone", "ara"], knowledge_doc.get("hotel_info", {}).get("phone")),
         ("email", ["email", "e-posta", "mail"], knowledge_doc.get("hotel_info", {}).get("email")),
         ("website", ["website", "web sitesi"], knowledge_doc.get("hotel_info", {}).get("website")),
         ("rooms", ["oda tipi", "room type", "room types"], knowledge_doc.get("rooms", {}).get("room_types")),
+        ("room rules", ["oda kural", "room rule"], knowledge_doc.get("rooms", {}).get("room_rules")),
+        ("extra bed", ["ekstra yatak", "extra bed"], knowledge_doc.get("rooms", {}).get("extra_bed_rules")),
+        ("baby bed", ["bebek yata", "baby bed", "crib"], knowledge_doc.get("rooms", {}).get("baby_bed_rules")),
         ("features", ["oda özellik", "room feature", "balkon", "deniz", "sea view", "mini bar", "kasa", "tv", "kahve"], knowledge_doc.get("rooms", {}).get("room_features")),
+        ("special rules", ["özel kural", "ozel kural", "special rule"], knowledge_doc.get("policies", {}).get("special_rules")),
     ]
     for _, keywords, value in field_groups:
         if any(keyword in lowered for keyword in keywords) and _clean_string(value):
@@ -1257,6 +1623,62 @@ def staff_department(u: dict) -> str:
     if not dept:
         raise HTTPException(403, "Personel departmanı tanımlı değil")
     return dept
+
+
+def can_manage_department_plans(u: dict) -> bool:
+    if role_of(u) == "hotel_manager":
+        return True
+    position = (u.get("position") or "").casefold()
+    return role_of(u) == "staff" and (
+        "supervisor" in position
+        or "manager" in position
+        or "müdür" in position
+        or "mudur" in position
+    )
+
+
+def planning_department(
+    u: dict,
+    requested: Optional[str] = None,
+    require_edit: bool = False,
+) -> Optional[str]:
+    if role_of(u) not in ("hotel_manager", "staff"):
+        raise HTTPException(403, "Planlama ekranına erişim yetkiniz yok")
+    if require_edit and not can_manage_department_plans(u):
+        raise HTTPException(403, "Planları yalnızca departman müdürleri değiştirebilir")
+    if role_of(u) == "hotel_manager":
+        if requested and requested not in DEPARTMENTS:
+            raise HTTPException(400, "Geçersiz departman")
+        return requested
+    own_department = staff_department(u)
+    if requested and requested != own_department:
+        raise HTTPException(403, "Yalnızca kendi departmanınızın planlarını yönetebilirsiniz")
+    return own_department
+
+
+def validate_schedule_values(date: str, start_time: str, end_time: str, task: str) -> None:
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+        datetime.strptime(start_time, "%H:%M")
+        datetime.strptime(end_time, "%H:%M")
+    except ValueError:
+        raise HTTPException(400, "Tarih YYYY-MM-DD, saatler HH:MM formatında olmalıdır")
+    if end_time <= start_time:
+        raise HTTPException(400, "Bitiş saati başlangıç saatinden sonra olmalıdır")
+    if not task.strip():
+        raise HTTPException(400, "Görev alanı zorunludur")
+
+
+def public_department_schedule(doc: dict) -> dict:
+    status_value = doc.get("status")
+    return {
+        **doc,
+        "task": doc.get("task") or doc.get("shift") or "Vardiya",
+        "status": status_value if status_value in ("Draft", "Approved") else "Draft",
+        "created_by": doc.get("created_by") or "seed",
+        "created_at": doc.get("created_at") or now_iso(),
+        "updated_at": doc.get("updated_at") or doc.get("created_at") or now_iso(),
+    }
 
 
 # date helpers for stay ranges removed with reservation module
@@ -1452,11 +1874,19 @@ AKILLI YÖNLENDİRME KURALLARI:
 - vale: Araç park etme / getirme, otopark, anahtar
 
 ÖNEMLİ DAVRANIŞLAR:
-1. GENEL SORULAR (otel hakkında bilgi, çalışma saatleri, restoran tavsiyesi, hava durumu, "merhaba" gibi sohbet) → ASLA talep oluşturma. ready=false, request=null. reply'da nazikçe ve faydalı şekilde kendin cevap ver.
-2. EYLEMLİ TALEPLER (yukarıdaki kategorilere giren somut bir hizmet isteği) → İlgili departmana yönlendir.
-3. Eksik bilgi varsa (oda no, saat, spesifik detay) nezaketle sor; ready=false, request=null.
-4. Tüm bilgiler tamamsa: ready=true ve request dolu olsun; reply'da "talebiniz alındı ve ... departmanına iletildi" tarzı bir onay ver.
-5. Departman SADECE bu 5'ten biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale.
+1. HER MESAJDA ÖNCE NİYETİ BELİRLE: SIPARIS, HIZMET_TALEBI, BILGI, SIKAYET veya GENEL.
+1A. Misafirin duygusunu da belirle ve reply tonunu uyarla: normalde sıcak ve profesyonel; üzgünse empatik; sinirliyse sakinleştirici ve çözüm odaklı; teşekkür ederse sıcak; olumluysa samimi; acilse ciddi, kısa ve net ol.
+1B. Misafirle tartışma, suçlayıcı veya savunmacı konuşma. Yakın yanıtlardaki aynı giriş cümlesini sürekli tekrarlama.
+1C. Yalnızca uygun olduğunda ve her mesajda olmamak üzere en fazla bir tane 😊 🙂 🙏 🏨 ❤️ emojisi kullan; profesyonelliği koru.
+2. GENEL SORULAR (otel hakkında bilgi, çalışma saatleri, restoran tavsiyesi, hava durumu, "merhaba" gibi sohbet) → ASLA talep oluşturma. ready=false, request=null. reply'da nazikçe ve faydalı şekilde kendin cevap ver.
+3. EYLEMLİ TALEPLER (yukarıdaki kategorilere giren somut bir hizmet isteği) → İlgili departmana yönlendir.
+4. SIPARIS veya HIZMET_TALEBI var ama ürün/hizmet adı belirsizse işlem yapma. Fiyat ya da menü gösterme; tam olarak ne istediğini tek bir kısa soruyla sor. ready=false, request=null.
+5. SIKAYET mesajında yalnızca bildirilen soruna odaklan ve çözüm için gerekli eksik bilgiyi sor.
+6. Eksik bilgi varsa (oda no, saat, spesifik detay) nezaketle sor; ready=false, request=null.
+7. Tüm bilgiler tamamsa: ready=true ve request dolu olsun; reply'da talebin hazırlandığını belirt ve oluşturmadan önce onay iste.
+8. Departman SADECE bu 5'ten biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale.
+9. ASLA alakasız fiyat listeleri veya menüler dökme. Yalnızca misafirin sorduğu ürün/hizmete odaklan. Misafir açıkça tüm menüyü veya fiyat listesini istemedikçe toplu liste verme. İstek belirsizse açıklama iste.
+10. Samimi ve doğal olmak için ASLA bilgi uydurma. Otel hakkında yalnızca sağlanan AI_KNOWLEDGE_BASE ve aktif servis verisini kullan; bilgi yoksa açıkça söyle ve resepsiyona yönlendir.
 
 YANIT FORMATI (HER ZAMAN sadece geçerli JSON, başka metin yok):
 {
@@ -1601,11 +2031,19 @@ def fallback_orchestrate(message: str, history: List[dict], service_context: Opt
 
 
 async def orchestrate(session_id: str, message: str, history: List[dict], service_context: Optional[Dict[str, Any]] = None, user: Optional[dict] = None) -> Dict[str, Any]:
+    current_message = message.split("\n(Sistem notu:", 1)[0].strip()
+    intent = recognize_intent(current_message)
+    if needs_request_details(current_message, intent):
+        return {
+            "reply": missing_details_reply((user or {}).get("room_no")),
+            "ready": False,
+            "request": None,
+        }
     if service_context:
-        kb_reply = knowledge_answer(message, service_context.get("ai_knowledge"))
+        kb_reply = knowledge_answer(current_message, service_context.get("ai_knowledge"))
         if kb_reply:
             return {"reply": kb_reply, "ready": False, "request": None}
-        answer = service_answer(message, service_context, user)
+        answer = service_answer(current_message, service_context, user)
         if answer:
             return answer
     if EMERGENT_LLM_KEY:
@@ -1621,7 +2059,8 @@ async def orchestrate(session_id: str, message: str, history: List[dict], servic
                 "Bilgi tabanı: " + str((service_context or {}).get("knowledge_base") or "Yok") + "\n"
                 "\nAI_KNOWLEDGE_BASE:\n"
                 + str((service_context or {}).get("ai_knowledge_text") or "Bu otel için AI bilgi tabanı boş.") +
-                "\nKurallar: Otel bilgisi sorularında yalnızca AI_KNOWLEDGE_BASE ve aktif servis listesini kullan. Bilgi yoksa uydurma; misafiri resepsiyona yönlendir. Başka otel bilgisi verme. Pasif servisten talep oluşturma. Talep oluşturmak için mutlaka önce onay iste."
+                f"\nSistem niyet analizi: {intent}. Sistem ton analizi: {recognize_tone(current_message)}. Bu etiketleri misafire gösterme."
+                "\nKurallar: Otel bilgisi sorularında yalnızca AI_KNOWLEDGE_BASE ve aktif servis listesini kullan. Bilgi yoksa uydurma; misafiri resepsiyona yönlendir. Başka otel bilgisi verme. Pasif servisten talep oluşturma. Talep oluşturmak için mutlaka önce onay iste. Asla alakasız fiyat listesi veya menü dökme. Yalnızca sorulan ürün/hizmete odaklan; belirsiz istekte açıklama sor. Tonu doğal, kibar, profesyonel ve duyguya uygun tut."
             )
             return await call_llm(session_id, message + prompt_service_context, history)
         except Exception as e:
@@ -1690,6 +2129,28 @@ async def active_hotels():
     docs = await db.hotels.find({"active": True}, {"_id": 0}).sort("hotel_name", 1).to_list(500)
     return [public_hotel(d) for d in docs]
 
+
+@api.get("/hotels/{hotel_id}/branding/{asset_type}")
+async def hotel_branding_asset(hotel_id: str, asset_type: Literal["logo", "intro"]):
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    asset = await db.hotel_branding_media.find_one(
+        {"hotel_id": hotel_id, "asset_type": asset_type},
+        {"_id": 0},
+    )
+    if not asset:
+        raise HTTPException(404, "Branding dosyası bulunamadı")
+    return Response(
+        bytes(asset["content"]),
+        media_type=asset["mime_type"],
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'inline; filename="{asset.get("file_name") or asset_type}"',
+        },
+    )
+
+
 @api.get("/hotel/services")
 async def my_hotel_services(u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager", "staff", "guest")
@@ -1698,6 +2159,198 @@ async def my_hotel_services(u: dict = Depends(get_current_user)):
         "services": await hotel_services_for_user(u),
         "labels": SERVICE_OPTIONS,
     }
+
+@api.get("/hotel/map-config", response_model=HotelMapConfigOut)
+async def my_hotel_map_config(u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager", "staff", "guest")
+    hotel_id = user_hotel_id(u)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    if not hotel:
+        raise HTTPException(404, "Otel bulunamadı")
+    latitude, longitude = hotel_map_coordinates(hotel)
+    return HotelMapConfigOut(
+        hotel_id=hotel_id,
+        hotel_name=hotel.get("hotel_name") or "Hospira Hotel",
+        address=hotel.get("address"),
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+OSM_POI_SELECTORS = {
+    "restaurant": '["amenity"="restaurant"]',
+    "cafe": '["amenity"="cafe"]',
+    "pharmacy": '["amenity"="pharmacy"]',
+    "historic": '["historic"]',
+    "museum": '["tourism"="museum"]',
+    "attraction": '["tourism"="attraction"]',
+    "park": '["leisure"="park"]',
+    "hospital": '["amenity"="hospital"]',
+    "shop": '["shop"]',
+}
+
+def _osm_address(tags: Dict[str, Any]) -> Optional[str]:
+    parts = [
+        " ".join(filter(None, [tags.get("addr:street"), tags.get("addr:housenumber")])).strip(),
+        tags.get("addr:district") or tags.get("addr:suburb"),
+        tags.get("addr:city"),
+    ]
+    address = ", ".join(str(part).strip() for part in parts if part and str(part).strip())
+    return address or None
+
+def normalize_overpass_place(raw: Dict[str, Any]) -> Optional[NearbyPlaceOut]:
+    tags = raw.get("tags")
+    if not isinstance(tags, dict):
+        return None
+    coordinates = raw if raw.get("type") == "node" else raw.get("center")
+    if not isinstance(coordinates, dict):
+        return None
+    try:
+        latitude = float(coordinates["lat"])
+        longitude = float(coordinates["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    title = str(tags.get("name") or tags.get("brand") or "").strip()
+    if not title:
+        return None
+    website = tags.get("contact:website") or tags.get("website")
+    phone = tags.get("contact:phone") or tags.get("phone")
+    return NearbyPlaceOut(
+        id=f"osm-{raw.get('type', 'place')}-{raw.get('id', '')}",
+        title=title,
+        address=_osm_address(tags),
+        phone=str(phone).strip() if phone else None,
+        website=str(website).strip() if website else None,
+        open_state=str(tags.get("opening_hours")).strip() if tags.get("opening_hours") else None,
+        gps_coordinates=GpsCoordinatesOut(latitude=latitude, longitude=longitude),
+    )
+
+def normalize_nominatim_result(raw: Dict[str, Any]) -> Optional[GeocodeResultOut]:
+    try:
+        latitude = float(raw["lat"])
+        longitude = float(raw["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    display_name = str(raw.get("display_name") or "").strip()
+    if not display_name or not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return GeocodeResultOut(
+        display_name=display_name,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+@api.get("/hotel/nearby-places", response_model=List[NearbyPlaceOut])
+async def hotel_nearby_places(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    place_type: Literal[
+        "restaurant", "cafe", "pharmacy", "historic", "museum",
+        "attraction", "park", "hospital", "shop",
+    ] = Query(..., alias="type"),
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "hotel_manager", "staff", "guest")
+    cache_key = (round(latitude, 3), round(longitude, 3), place_type)
+    cached = _nearby_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < MAP_CACHE_TTL_SECONDS:
+        return [NearbyPlaceOut.model_validate(item) for item in cached[1]]
+
+    selector = OSM_POI_SELECTORS[place_type]
+    query = (
+        f'[out:json][timeout:15];'
+        f"(nwr(around:2500,{latitude:.7f},{longitude:.7f}){selector};);"
+        "out center tags 40;"
+    )
+    payload: Optional[Dict[str, Any]] = None
+    last_error: Optional[Exception] = None
+    for overpass_url in OVERPASS_URLS:
+        try:
+            response = await asyncio.to_thread(
+                requests.post,
+                overpass_url,
+                data={"data": query},
+                headers={"User-Agent": OSM_USER_AGENT, "Accept-Language": "tr"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            candidate = response.json()
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            logger.warning(
+                "Overpass nearby search failed on %s (%s)",
+                overpass_url,
+                type(exc).__name__,
+            )
+    if payload is None:
+        raise HTTPException(502, "Yakındaki işletmeler şu anda alınamıyor.") from last_error
+
+    places: List[NearbyPlaceOut] = []
+    for raw in payload.get("elements") or []:
+        if not isinstance(raw, dict):
+            continue
+        normalized = normalize_overpass_place(raw)
+        if normalized:
+            places.append(normalized)
+        if len(places) >= 20:
+            break
+    serialized = [place.model_dump() for place in places]
+    _nearby_cache[cache_key] = (time.monotonic(), serialized)
+    return places
+
+@api.get("/geocode", response_model=List[GeocodeResultOut])
+async def geocode_address(
+    query: str = Query(..., min_length=3, max_length=200),
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "system_admin", "hotel_manager")
+    normalized_query = " ".join(query.split())
+    cache_key = normalized_query.casefold()
+    cached = _geocode_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < GEOCODE_CACHE_TTL_SECONDS:
+        return [GeocodeResultOut.model_validate(item) for item in cached[1]]
+
+    global _nominatim_last_request
+    async with _nominatim_lock:
+        wait_seconds = 1.0 - (time.monotonic() - _nominatim_last_request)
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+        try:
+            response = await asyncio.to_thread(
+                requests.get,
+                NOMINATIM_URL,
+                params={
+                    "q": normalized_query,
+                    "format": "jsonv2",
+                    "limit": 5,
+                    "addressdetails": 0,
+                    "countrycodes": "tr",
+                },
+                headers={"User-Agent": OSM_USER_AGENT, "Accept-Language": "tr"},
+                timeout=10,
+            )
+            _nominatim_last_request = time.monotonic()
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            _nominatim_last_request = time.monotonic()
+            logger.warning("Nominatim geocode failed (%s)", type(exc).__name__)
+            raise HTTPException(502, "Adres araması şu anda yapılamıyor.") from exc
+
+    results: List[GeocodeResultOut] = []
+    for raw in payload if isinstance(payload, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        normalized = normalize_nominatim_result(raw)
+        if normalized:
+            results.append(normalized)
+    serialized = [result.model_dump() for result in results]
+    _geocode_cache[cache_key] = (time.monotonic(), serialized)
+    return results
 
 @api.get("/auth/me", response_model=UserPublic)
 async def me(u: dict = Depends(get_current_user)):
@@ -1747,6 +2400,29 @@ async def create_guest_request_from_pending(pending: dict, u: dict, fallback_mes
     }
     return req["id"], parsed
 
+
+@api.post("/reception-ai/chat", response_model=ReceptionChatOut)
+async def reception_ai_chat(
+    body: ReceptionChatIn,
+    _u: dict = Depends(get_current_user),
+):
+    """ChatGPT-powered reception assistant with client-supplied conversation history."""
+    try:
+        reply = await ask_reception_ai(
+            body.message,
+            [item.model_dump() for item in body.history],
+            room_number=_u.get("room_no"),
+        )
+    except ReceptionAIError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.user_message,
+        ) from exc
+    return ReceptionChatOut(
+        reply=reply,
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+    )
+
 @api.post("/chat", response_model=ChatOut)
 async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
     session_id = body.session_id or str(uuid.uuid4())
@@ -1770,14 +2446,22 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
     if pending_request and role_of(u) == "guest":
         if is_confirmation(body.message):
             request_id, parsed_clean = await create_guest_request_from_pending(pending_request, u, body.message, services)
-            reply = "Talebiniz onayınızla oluşturuldu ve ilgili ekibe iletildi."
+            reply = adapt_reception_tone(
+                body.message,
+                "Talebiniz onayınızla oluşturuldu ve ilgili ekibe iletildi.",
+                history,
+            )
             await db.chat_messages.insert_one({
                 "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
                 "role": "assistant", "content": reply, "created_at": now_iso(),
             })
             return ChatOut(session_id=session_id, reply=reply, ready=True, request_id=request_id, parsed=parsed_clean)
         if is_rejection(body.message):
-            reply = "Tamam, talep oluşturmadım. Başka bir konuda yardımcı olabilirim."
+            reply = adapt_reception_tone(
+                body.message,
+                "Tamam, talep oluşturmadım. Başka bir konuda yardımcı olabilirim.",
+                history,
+            )
             await db.chat_messages.insert_one({
                 "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
                 "role": "assistant", "content": reply, "created_at": now_iso(),
@@ -1785,7 +2469,11 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
             return ChatOut(session_id=session_id, reply=reply, ready=False, request_id=None, parsed=None)
         updated_pending = dict(pending_request)
         updated_pending["detay"] = f"{pending_request.get('detay') or ''}\nEk bilgi: {body.message}".strip()
-        reply = "Bilgileri talebe ekledim. Talep oluşturmamı onaylıyor musunuz? Onaylıyorsanız 'evet' yazın."
+        reply = adapt_reception_tone(
+            body.message,
+            "Bilgileri talebe ekledim. Talep oluşturmamı onaylıyor musunuz? Onaylıyorsanız 'evet' yazın.",
+            history,
+        )
         await db.chat_messages.insert_one({
             "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
             "role": "assistant", "content": reply, "pending_request": updated_pending, "created_at": now_iso(),
@@ -1833,6 +2521,7 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
         ready = False
         reply = reply or "AI asistan not aldı. Operasyon kaydı oluşturmak için misafir talebi gereklidir."
 
+    reply = adapt_reception_tone(body.message, reply, history)
     assistant_doc = {
         "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
         "role": "assistant", "content": reply, "created_at": now_iso(),
@@ -2171,27 +2860,58 @@ async def system_list_hotels(u: dict = Depends(get_current_user)):
     return [public_hotel(d) for d in docs]
 
 @api.post("/system/hotels", response_model=HotelOut)
-async def system_create_hotel(body: HotelCreateIn, u: dict = Depends(get_current_user)):
+async def system_create_hotel(
+    hotel_name: str = Form(...),
+    city: str = Form(...),
+    logo: UploadFile = File(...),
+    address: Optional[str] = Form(None),
+    latitude: Optional[float] = Form(None),
+    longitude: Optional[float] = Form(None),
+    reservation_url: Optional[str] = Form(None),
+    active: bool = Form(True),
+    intro_video: Optional[UploadFile] = File(None),
+    u: dict = Depends(get_current_user),
+):
     require_roles(u, "system_admin")
+    logo_data, logo_mime, logo_name = await validate_branding_logo(logo)
+    intro_asset = await validate_branding_intro(intro_video) if intro_video else None
     doc = {
         "id": str(uuid.uuid4()),
-        "hotel_name": body.hotel_name.strip(),
-        "city": body.city.strip(),
-        "address": body.address,
-        "active": body.active,
+        "hotel_name": hotel_name.strip(),
+        "city": city.strip(),
+        "address": address,
+        "latitude": latitude,
+        "longitude": longitude,
+        "reservation_url": reservation_url.strip() if reservation_url else None,
+        "active": active,
         "manager_id": None,
         "services": default_services(),
+        "branding": {},
         "created_at": now_iso(),
     }
     if not doc["hotel_name"] or not doc["city"]:
         raise HTTPException(400, "Otel adı ve şehir gerekli")
+    validate_hotel_reservation_settings(doc)
     await db.hotels.insert_one(doc.copy())
-    return public_hotel(doc)
+    try:
+        await upsert_branding_media(doc["id"], "logo", logo_data, logo_mime, logo_name, u["id"])
+        if intro_asset:
+            intro_data, intro_mime, intro_name, duration = intro_asset
+            await upsert_branding_media(
+                doc["id"], "intro", intro_data, intro_mime, intro_name, u["id"], duration
+            )
+    except Exception:
+        await db.hotels.delete_one({"id": doc["id"]})
+        await db.hotel_branding_media.delete_many({"hotel_id": doc["id"]})
+        raise
+    created = await db.hotels.find_one({"id": doc["id"]}, {"_id": 0})
+    return public_hotel(created)
 
 @api.patch("/system/hotels/{hotel_id}", response_model=HotelOut)
 async def system_update_hotel(hotel_id: str, body: HotelUpdateIn, u: dict = Depends(get_current_user)):
     require_roles(u, "system_admin")
     update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    validate_hotel_reservation_settings(update)
     if "services" in update:
         update["services"] = validate_services(update["services"])
     if update:
@@ -2200,6 +2920,41 @@ async def system_update_hotel(hotel_id: str, body: HotelUpdateIn, u: dict = Depe
     if not h:
         raise HTTPException(404, "Otel bulunamadı")
     return public_hotel(h)
+
+
+@api.put("/system/hotels/{hotel_id}/branding/{asset_type}", response_model=HotelOut)
+async def system_update_hotel_branding(
+    hotel_id: str,
+    asset_type: Literal["logo", "intro"],
+    file: UploadFile = File(...),
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "system_admin")
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    if asset_type == "logo":
+        data, mime_type, file_name = await validate_branding_logo(file)
+        duration = None
+    else:
+        data, mime_type, file_name, duration = await validate_branding_intro(file)
+    await upsert_branding_media(hotel_id, asset_type, data, mime_type, file_name, u["id"], duration)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    return public_hotel(hotel)
+
+
+@api.delete("/system/hotels/{hotel_id}/branding/{asset_type}", response_model=HotelOut)
+async def system_delete_hotel_branding(
+    hotel_id: str,
+    asset_type: Literal["logo", "intro"],
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "system_admin")
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    await delete_branding_media(hotel_id, asset_type)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    return public_hotel(hotel)
+
 
 @api.post("/system/hotels/{hotel_id}/activate", response_model=HotelOut)
 async def system_activate_hotel(hotel_id: str, body: AccountDisableIn, u: dict = Depends(get_current_user)):
@@ -2217,6 +2972,7 @@ async def system_delete_hotel(hotel_id: str, u: dict = Depends(get_current_user)
     if res.deleted_count == 0:
         raise HTTPException(404, "Otel bulunamadı")
     await db.users.update_many({"$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]}, {"$set": {"active": False}})
+    await db.hotel_branding_media.delete_many({"hotel_id": hotel_id})
     return {"ok": True}
 
 @api.post("/system/managers", response_model=UserAdminOut)
@@ -2373,8 +3129,12 @@ async def manager_update_hotel(body: HotelUpdateIn, u: dict = Depends(get_curren
     require_roles(u, "hotel_manager")
     update = {
         k: v for k, v in body.model_dump(exclude_unset=True).items()
-        if v is not None and k in {"hotel_name", "city", "address", "services"}
+        if v is not None and k in {
+            "hotel_name", "city", "address", "latitude", "longitude", "services",
+            "reservation_url",
+        }
     }
+    validate_hotel_reservation_settings(update)
     if "services" in update:
         update["services"] = validate_services(update["services"])
     if update:
@@ -2383,6 +3143,41 @@ async def manager_update_hotel(body: HotelUpdateIn, u: dict = Depends(get_curren
     if not h:
         raise HTTPException(404, "Otel bulunamadı")
     return public_hotel(h)
+
+
+@api.put("/manager/hotel/branding/{asset_type}", response_model=HotelOut)
+async def manager_update_hotel_branding(
+    asset_type: Literal["logo", "intro"],
+    file: UploadFile = File(...),
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "hotel_manager")
+    hotel_id = user_hotel_id(u)
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    if asset_type == "logo":
+        data, mime_type, file_name = await validate_branding_logo(file)
+        duration = None
+    else:
+        data, mime_type, file_name, duration = await validate_branding_intro(file)
+    await upsert_branding_media(hotel_id, asset_type, data, mime_type, file_name, u["id"], duration)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    return public_hotel(hotel)
+
+
+@api.delete("/manager/hotel/branding/{asset_type}", response_model=HotelOut)
+async def manager_delete_hotel_branding(
+    asset_type: Literal["logo", "intro"],
+    u: dict = Depends(get_current_user),
+):
+    require_roles(u, "hotel_manager")
+    hotel_id = user_hotel_id(u)
+    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
+        raise HTTPException(404, "Otel bulunamadı")
+    await delete_branding_media(hotel_id, asset_type)
+    hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0})
+    return public_hotel(hotel)
+
 
 @api.get("/manager/ai-knowledge", response_model=HotelAiKnowledgeOut)
 async def manager_get_ai_knowledge(u: dict = Depends(get_current_user)):
@@ -2412,18 +3207,11 @@ async def manager_delete_ai_knowledge(u: dict = Depends(get_current_user)):
 
 @api.get("/staff/ai-knowledge", response_model=HotelAiKnowledgeOut)
 async def staff_get_ai_knowledge(u: dict = Depends(get_current_user)):
-    require_roles(u, "staff")
-    return public_ai_knowledge(await get_ai_knowledge_doc(user_hotel_id(u)))
+    raise HTTPException(403, "Otel bilgileri ve kuralları yalnızca Hotel Manager tarafından görüntülenebilir")
 
 @api.get("/system/ai-knowledge", response_model=HotelAiKnowledgeOut)
 async def system_get_ai_knowledge(hotel_id: str = Query(...), u: dict = Depends(get_current_user)):
-    require_roles(u, "system_admin")
-    hotel_id = hotel_id.strip()
-    if not hotel_id:
-        raise HTTPException(400, "hotel_id gerekli")
-    if not await db.hotels.find_one({"id": hotel_id}, {"_id": 1}):
-        raise HTTPException(404, "Otel bulunamadı")
-    return public_ai_knowledge(await get_ai_knowledge_doc(hotel_id))
+    raise HTTPException(403, "Otel bilgileri ve kuralları yalnızca Hotel Manager tarafından görüntülenebilir")
 
 @api.get("/manager/staff", response_model=List[UserAdminOut])
 async def manager_list_staff(u: dict = Depends(get_current_user)):
@@ -2446,19 +3234,20 @@ async def manager_create_staff(body: StaffCreateIn, u: dict = Depends(get_curren
         "name": body.name.strip(),
         "role": "staff",
         "department": body.department,
+        "position": (body.position or "").strip() or None,
         "room_no": None,
-        "gender": body.gender.strip(),
-        "birth_date": validate_birth_date(body.birth_date),
-        "nationality": body.nationality.strip(),
-        "country": body.country.strip(),
-        "region_city": body.region_city.strip(),
+        "gender": body.gender.strip() if body.gender else None,
+        "birth_date": validate_birth_date(body.birth_date) if body.birth_date else None,
+        "nationality": body.nationality.strip() if body.nationality else None,
+        "country": body.country.strip() if body.country else None,
+        "region_city": body.region_city.strip() if body.region_city else None,
         "hotel_id": user_hotel_id(u),
         "hotelId": user_hotel_id(u),
         "active": True,
         "created_at": now_iso(),
     }
-    if not all([staff["name"], staff["gender"], staff["nationality"], staff["country"], staff["region_city"]]):
-        raise HTTPException(400, "Çalışan profil alanları zorunludur")
+    if not staff["name"]:
+        raise HTTPException(400, "Çalışan adı zorunludur")
     await db.users.insert_one(staff.copy())
     return public_admin_user(staff)
 
@@ -2473,11 +3262,13 @@ async def manager_update_staff(staff_id: str, body: StaffUpdateIn, u: dict = Dep
     current_staff = await db.users.find_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"_id": 0})
     if not current_staff:
         raise HTTPException(404, "Personel bulunamadı")
-    for key in ("name", "gender", "nationality", "country", "region_city"):
+    for key in ("name", "position", "gender", "nationality", "country", "region_city"):
         if key in update:
-            update[key] = update[key].strip()
-            if not update[key]:
+            update[key] = update[key].strip() if isinstance(update[key], str) else update[key]
+            if key != "position" and not update[key]:
                 raise HTTPException(400, "Çalışan profil alanları boş olamaz")
+            if key == "position" and not update[key]:
+                update[key] = None
     if update:
         await db.users.update_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"$set": update})
     staff = await db.users.find_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"_id": 0})
@@ -2490,6 +3281,222 @@ async def manager_delete_staff(staff_id: str, u: dict = Depends(get_current_user
     if res.deleted_count == 0:
         raise HTTPException(404, "Personel bulunamadı")
     return {"ok": True}
+
+
+async def planning_employee(u: dict, employee_id: str, department: str) -> dict:
+    employee = await db.users.find_one(
+        with_hotel_scope(u, {"id": employee_id, "role": "staff", "active": {"$ne": False}}),
+        {"_id": 0},
+    )
+    if not employee:
+        raise HTTPException(404, "Aktif personel bulunamadı")
+    if employee.get("department") != department:
+        raise HTTPException(400, "Personel seçilen departmanda çalışmıyor")
+    return employee
+
+
+@api.get("/planning/staff", response_model=List[UserAdminOut])
+async def planning_staff(department: Optional[str] = Query(None), u: dict = Depends(get_current_user)):
+    scoped_department = planning_department(u, department)
+    query = with_hotel_scope(u, {"role": "staff", "active": {"$ne": False}})
+    if scoped_department:
+        query["department"] = scoped_department
+    docs = await db.users.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return [public_admin_user(doc) for doc in docs]
+
+
+@api.get("/planning", response_model=List[DepartmentScheduleOut])
+async def list_department_schedules(
+    department: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    u: dict = Depends(get_current_user),
+):
+    scoped_department = planning_department(u, department)
+    query: Dict[str, Any] = with_hotel_scope(u)
+    if scoped_department:
+        query["department"] = scoped_department
+    if from_date or to_date:
+        query["date"] = {}
+        if from_date:
+            query["date"]["$gte"] = from_date
+        if to_date:
+            query["date"]["$lte"] = to_date
+    docs = await db.staff_schedules.find(query, {"_id": 0}).sort([("date", -1), ("start_time", 1)]).to_list(2000)
+    return [public_department_schedule(doc) for doc in docs]
+
+
+@api.post("/planning", response_model=DepartmentScheduleOut)
+async def create_department_schedule(body: DepartmentScheduleIn, u: dict = Depends(get_current_user)):
+    initial_department = planning_department(u, body.department, require_edit=True)
+    if initial_department:
+        department = initial_department
+    else:
+        employee_doc = await db.users.find_one(
+            with_hotel_scope(u, {"id": body.employee_id, "role": "staff", "active": {"$ne": False}}),
+            {"_id": 0},
+        )
+        if not employee_doc or not employee_doc.get("department"):
+            raise HTTPException(404, "Aktif personel veya departmanı bulunamadı")
+        department = employee_doc["department"]
+        planning_department(u, department, require_edit=True)
+    employee = await planning_employee(u, body.employee_id, department)
+    validate_schedule_values(body.date, body.start_time, body.end_time, body.task)
+    conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
+        "employee_id": body.employee_id,
+        "date": body.date,
+        "start_time": {"$lt": body.end_time},
+        "end_time": {"$gt": body.start_time},
+    }), {"_id": 0})
+    if conflict:
+        raise HTTPException(409, "Personelin bu saatlerle çakışan başka bir planı var")
+    timestamp = now_iso()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "employee_id": employee["id"],
+        "employee_name": employee["name"],
+        "department": department,
+        "position": employee.get("position"),
+        "date": body.date,
+        "start_time": body.start_time,
+        "end_time": body.end_time,
+        "task": body.task.strip(),
+        "status": "Draft",
+        "created_by": u["id"],
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "hotel_id": user_hotel_id(u),
+        "hotelId": user_hotel_id(u),
+    }
+    await db.staff_schedules.insert_one(doc.copy())
+    return public_department_schedule(doc)
+
+
+@api.patch("/planning/{schedule_id}", response_model=DepartmentScheduleOut)
+async def update_department_schedule(
+    schedule_id: str,
+    body: DepartmentScheduleUpdateIn,
+    u: dict = Depends(get_current_user),
+):
+    current = await db.staff_schedules.find_one(with_hotel_scope(u, {"id": schedule_id}), {"_id": 0})
+    if not current:
+        raise HTTPException(404, "Plan bulunamadı")
+    planning_department(u, current.get("department"), require_edit=True)
+    department = body.department or current.get("department")
+    if not department:
+        raise HTTPException(400, "Plan departmanı bulunamadı")
+    planning_department(u, department, require_edit=True)
+    employee_id = body.employee_id or current.get("employee_id")
+    employee = await planning_employee(u, employee_id, department)
+    date = body.date or current.get("date")
+    start_time = body.start_time or current.get("start_time")
+    end_time = body.end_time or current.get("end_time")
+    task = body.task if body.task is not None else current.get("task") or current.get("shift") or ""
+    validate_schedule_values(date, start_time, end_time, task)
+    conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
+        "id": {"$ne": schedule_id},
+        "employee_id": employee_id,
+        "date": date,
+        "start_time": {"$lt": end_time},
+        "end_time": {"$gt": start_time},
+    }), {"_id": 0})
+    if conflict:
+        raise HTTPException(409, "Personelin bu saatlerle çakışan başka bir planı var")
+    update = {
+        "employee_id": employee["id"],
+        "employee_name": employee["name"],
+        "department": department,
+        "position": employee.get("position"),
+        "date": date,
+        "start_time": start_time,
+        "end_time": end_time,
+        "task": task.strip(),
+        "status": "Draft",
+        "updated_at": now_iso(),
+    }
+    await db.staff_schedules.update_one(
+        with_hotel_scope(u, {"id": schedule_id}),
+        {"$set": update, "$unset": {"approved_by": "", "approved_at": ""}},
+    )
+    doc = await db.staff_schedules.find_one(with_hotel_scope(u, {"id": schedule_id}), {"_id": 0})
+    return public_department_schedule(doc)
+
+
+@api.delete("/planning/{schedule_id}")
+async def delete_department_schedule(schedule_id: str, u: dict = Depends(get_current_user)):
+    current = await db.staff_schedules.find_one(with_hotel_scope(u, {"id": schedule_id}), {"_id": 0})
+    if not current:
+        raise HTTPException(404, "Plan bulunamadı")
+    planning_department(u, current.get("department"), require_edit=True)
+    await db.staff_schedules.delete_one(with_hotel_scope(u, {"id": schedule_id}))
+    return {"ok": True}
+
+
+@api.post("/planning/{schedule_id}/approve", response_model=DepartmentScheduleOut)
+async def approve_department_schedule(schedule_id: str, u: dict = Depends(get_current_user)):
+    require_roles(u, "hotel_manager")
+    update = {
+        "status": "Approved",
+        "approved_by": u["id"],
+        "approved_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    result = await db.staff_schedules.update_one(with_hotel_scope(u, {"id": schedule_id}), {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Plan bulunamadı")
+    doc = await db.staff_schedules.find_one(with_hotel_scope(u, {"id": schedule_id}), {"_id": 0})
+    return public_department_schedule(doc)
+
+
+@api.get("/planning/export")
+async def export_department_schedules(
+    department: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    u: dict = Depends(get_current_user),
+):
+    scoped_department = planning_department(u, department, require_edit=True)
+    query: Dict[str, Any] = with_hotel_scope(u)
+    if scoped_department:
+        query["department"] = scoped_department
+    if from_date or to_date:
+        query["date"] = {}
+        if from_date:
+            query["date"]["$gte"] = from_date
+        if to_date:
+            query["date"]["$lte"] = to_date
+    docs = await db.staff_schedules.find(query, {"_id": 0}).sort([("date", 1), ("start_time", 1)]).to_list(10000)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Planlama"
+    sheet.append(["Tarih", "Departman", "Personel", "Pozisyon", "Başlangıç", "Bitiş", "Görev", "Durum", "Onay Tarihi"])
+    for raw in docs:
+        doc = public_department_schedule(raw)
+        sheet.append([
+            doc["date"],
+            DEPARTMENTS.get(doc["department"], doc["department"]),
+            doc["employee_name"],
+            doc.get("position") or "",
+            doc["start_time"],
+            doc["end_time"],
+            doc["task"],
+            "Onaylandı" if doc["status"] == "Approved" else "Taslak",
+            doc.get("approved_at") or "",
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    widths = (14, 22, 24, 24, 12, 12, 44, 14, 24)
+    for index, width in enumerate(widths, 1):
+        sheet.column_dimensions[chr(64 + index)].width = width
+    output = BytesIO()
+    workbook.save(output)
+    suffix = scoped_department or "tum-departmanlar"
+    return Response(
+        output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="planlama-{suffix}.xlsx"'},
+    )
+
 
 @api.post("/manager/requests/{req_id}/assign", response_model=RequestOut)
 async def manager_assign_task(req_id: str, body: AssignTaskIn, u: dict = Depends(get_current_user)):
@@ -4110,9 +5117,7 @@ async def ensure_system_admin() -> None:
 
     other_admin = await db.users.find_one({"role": "system_admin"}, {"_id": 0})
     if other_admin:
-        set_fields["email"] = email
-        await db.users.update_one({"id": other_admin["id"]}, {"$set": set_fields})
-        logger.info("System admin credentials updated from env for %s", email)
+        logger.info("Existing system admin retained: %s", other_admin.get("email"))
         return
 
     if not SYSTEM_ADMIN_PASSWORD_FROM_ENV:
@@ -4168,6 +5173,23 @@ async def ensure_ai_knowledge_indexes() -> None:
         partialFilterExpression={"hotel_id": {"$exists": True}},
     )
 
+
+async def ensure_planning_indexes() -> None:
+    await db.staff_schedules.create_index(
+        [("hotel_id", 1), ("department", 1), ("date", -1), ("start_time", 1)],
+        background=True,
+    )
+    await db.staff_schedules.create_index(
+        [("hotel_id", 1), ("employee_id", 1), ("date", 1)],
+        background=True,
+    )
+    await db.hotel_branding_media.create_index(
+        [("hotel_id", 1), ("asset_type", 1)],
+        unique=True,
+        background=True,
+    )
+
+
 async def seed_demo():
     if await db.users.count_documents({}) > 0:
         await db.users.update_many({"role": "admin"}, {"$set": {"role": "hotel_manager"}})
@@ -4176,11 +5198,12 @@ async def seed_demo():
         await db.rooms.update_many({"hotel_id": {"$exists": True}, "hotelId": {"$exists": False}}, [{"$set": {"hotelId": "$hotel_id"}}])
         await migrate_room_fields()
         await ensure_ai_knowledge_indexes()
+        await ensure_planning_indexes()
         await db.hotels.update_many({"services": {"$exists": False}}, {"$set": {"services": default_services()}})
         if not await db.hotels.find_one({"id": DEFAULT_HOTEL_ID}):
             await db.hotels.insert_one({
                 "id": DEFAULT_HOTEL_ID,
-                "hotel_name": "Astoria",
+                "hotel_name": "Hospira",
                 "city": "Istanbul",
                 "address": "Demo Hotel",
                 "active": True,
@@ -4189,7 +5212,10 @@ async def seed_demo():
                 "created_at": now_iso(),
             })
         await ensure_system_admin()
-        if not await db.users.find_one({"email": "manager@hotel.com"}):
+        if not await db.users.find_one({
+            "role": "hotel_manager",
+            "$or": [{"hotel_id": DEFAULT_HOTEL_ID}, {"hotelId": DEFAULT_HOTEL_ID}],
+        }):
             manager = {
                 "id": str(uuid.uuid4()),
                 "email": "manager@hotel.com",
@@ -4209,7 +5235,7 @@ async def seed_demo():
     logger.info("Seeding demo data...")
     await db.hotels.insert_one({
         "id": DEFAULT_HOTEL_ID,
-        "hotel_name": "Astoria",
+        "hotel_name": "Hospira",
         "city": "Istanbul",
         "address": "Demo Hotel",
         "active": True,
@@ -4304,12 +5330,16 @@ async def seed_demo():
         })
 
     await ensure_ai_knowledge_indexes()
+    await ensure_planning_indexes()
     logger.info("Seed complete.")
+
+register_reservation_referral_routes(api, db, get_current_user)
+
 
 @app.on_event("startup")
 async def on_start():
     await seed_demo()
-    await db.reservations.drop()
+    await ensure_reservation_referral_indexes(db)
     # Drop removed Identity Verification module collections
     await db.identity_verifications.drop()
     await db.identity_documents.drop()

@@ -38,7 +38,13 @@ export default function Checkin() {
       await setToken(r.token);
       await refresh();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace(dashboardRouteForRole(r.user.role));
+      router.replace({
+        pathname: "/hotel-branding",
+        params: {
+          hotelId: r.user.hotel_id || r.user.hotelId || "",
+          next: String(dashboardRouteForRole(r.user.role)),
+        },
+      });
     } catch (e: any) {
       setErr(e.message);
     } finally { setLoading(false); }

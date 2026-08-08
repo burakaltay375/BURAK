@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-nat
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { api } from "@/src/api";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 type Stats = {
@@ -31,6 +32,7 @@ export default function AdminDashboard() {
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="admin-dashboard-screen">
       <ScrollView contentContainerStyle={s.content}>
+        <HospiraBrand compact />
         <Text style={s.title}>Operasyon Merkezi</Text>
         <Text style={s.sub}>Genel bakış · Canlı veri</Text>
 

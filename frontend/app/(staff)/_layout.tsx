@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { RoleGate } from "@/src/role-guard";
+import { HospiraMark } from "@/src/components/HospiraBrand";
 import { COLORS } from "@/src/theme";
 
 export default function StaffLayout() {
@@ -15,10 +16,11 @@ export default function StaffLayout() {
           tabBarLabelStyle: { fontSize: 11 },
         }}
       >
-        <Tabs.Screen name="queue" options={{ title: "Kuyruk", tabBarIcon: ({ color, size }) => <Ionicons name="notifications" color={color} size={size} /> }} />
+        <Tabs.Screen name="queue" options={{ title: "Kuyruk", tabBarIcon: ({ size }) => <HospiraMark size={size} /> }} />
         <Tabs.Screen name="active" options={{ title: "Aktif İşler", tabBarIcon: ({ color, size }) => <Ionicons name="briefcase" color={color} size={size} /> }} />
         <Tabs.Screen name="rooms" options={{ title: "Odalar", tabBarIcon: ({ color, size }) => <Ionicons name="bed" color={color} size={size} /> }} />
-        <Tabs.Screen name="ai-knowledge" options={{ title: "AI Bilgi", tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" color={color} size={size} /> }} />
+        <Tabs.Screen name="planning" options={{ title: "Planlama", tabBarIcon: ({ color, size }) => <Ionicons name="calendar" color={color} size={size} /> }} />
+        <Tabs.Screen name="ai-knowledge" options={{ href: null }} />
         <Tabs.Screen name="chat" options={{ title: "AI", tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses" color={color} size={size} /> }} />
         <Tabs.Screen name="profile" options={{ title: "Profil", tabBarIcon: ({ color, size }) => <Ionicons name="person-circle" color={color} size={size} /> }} />
       </Tabs>

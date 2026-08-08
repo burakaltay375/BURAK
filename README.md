@@ -52,6 +52,9 @@ Then edit each local file:
 | `JWT_SECRET` | Required | Required (strong random secret) |
 | `SYSTEM_ADMIN_EMAIL` | Required | Required |
 | `SYSTEM_ADMIN_PASSWORD` | Required | Required (strong password) |
+| `OPENAI_API_KEY` | Required for reception AI | Required for reception AI |
+| `OPENAI_MODEL` | Optional (`gpt-4o-mini`) | Optional (`gpt-4o` or `gpt-4o-mini`) |
+| `OSM_USER_AGENT` | Optional; repository URL default is used | Recommended; identify the deployed Hospira instance |
 | `IDENTITY_ENCRYPTION_KEY` | Optional | Strongly recommended |
 | `EMERGENT_LLM_KEY` | Optional | Required if using AI / voice features |
 | `RESEND_API_KEY` | Optional (emails logged only) | Required for real email |
@@ -69,6 +72,16 @@ Then edit each local file:
 | Variable | Development | Production |
 |----------|-------------|------------|
 | `EXPO_PUBLIC_BACKEND_URL` | Required if backend is not on `http://localhost:8000` | Required (public API origin, no `/api` suffix) |
+
+Keşfet and hotel previews use **Leaflet + OpenStreetMap** and require no map API key.
+Nearby businesses come from the OpenStreetMap Overpass API. “Konumu Bul” calls
+Nominatim only when the administrator presses the button; requests are cached and
+rate-limited by the backend. Browser geolocation works only on HTTPS origins or
+`localhost`.
+
+The public `tile.openstreetmap.org` service is suitable for normal interactive use,
+not bulk downloading or heavy production traffic. High-volume deployments should use
+an OSM-compatible hosted tile provider or self-hosted tiles while retaining attribution.
 
 **Optional frontend dev tooling** (commented in `frontend/.env.example`; not needed for normal app use):
 

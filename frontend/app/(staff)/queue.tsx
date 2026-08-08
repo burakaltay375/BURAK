@@ -5,6 +5,7 @@ import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { api, RequestItem, type HotelServices } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, PRIORITY_COLOR, SERVICE_LABELS } from "@/src/theme";
 
 export default function StaffQueue() {
@@ -63,6 +64,7 @@ export default function StaffQueue() {
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="staff-queue-screen">
       <View style={s.header}>
+        <HospiraBrand compact />
         <Text style={s.title}>Bekleyen İşler</Text>
         <Text style={s.sub}>{DEPT_LABEL[user?.department ?? ""] ?? "Departman"} · {items.length} talep</Text>
         {!!enabledServices.length && (

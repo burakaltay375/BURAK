@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/auth";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
@@ -36,6 +37,7 @@ export default function Register() {
     <View style={s.root} testID="register-screen">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+          <HospiraBrand compact subtitle="Akıllı Operasyon Merkezi" />
           <Pressable onPress={() => router.back()} testID="register-back-button" style={s.backBtn}>
             <Text style={s.back}>‹ Geri</Text>
           </Pressable>

@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { Redirect } from "expo-router";
 
 import { useAuth } from "./auth";
+import HospiraBrand from "./components/HospiraBrand";
 import type { Role } from "./api";
 import { dashboardRouteForRole, normalizeRole } from "./roles";
 import { COLORS } from "./theme";
@@ -18,7 +19,8 @@ export function RoleGate({ role, children }: Props) {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: COLORS.surface }}>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 16, backgroundColor: COLORS.surface }}>
+        <HospiraBrand compact />
         <ActivityIndicator color={COLORS.brand} size="large" />
       </View>
     );

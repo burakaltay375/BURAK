@@ -71,8 +71,8 @@ export default function ManagerAiKnowledge() {
     <SafeAreaView style={s.root} edges={["top"]} testID="manager-ai-knowledge-screen">
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <View style={s.header}>
-          <Text style={s.title}>AI Knowledge Center</Text>
-          <Text style={s.sub}>Misafir AI asistanı yalnızca bu otelin bilgi tabanını yanıt kaynağı olarak kullanır.</Text>
+          <Text style={s.title}>Otel Bilgileri ve Kuralları</Text>
+          <Text style={s.sub}>Buraya kaydettiğiniz otel bilgileri ve kurallar, AI resepsiyonun misafirlere verdiği yanıtlarda kaynak olarak kullanılır. Bilgi girilmeyen konularda AI tahmin yürütmez.</Text>
           {updatedAt && <Text style={s.meta}>Son güncelleme: {new Date(updatedAt).toLocaleString("tr-TR")}</Text>}
           {err && <Text style={s.err}>{err}</Text>}
           <View style={s.actions}>

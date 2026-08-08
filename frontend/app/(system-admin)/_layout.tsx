@@ -3,6 +3,7 @@ import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { RoleGate } from "@/src/role-guard";
+import { HospiraMark } from "@/src/components/HospiraBrand";
 
 import { COLORS } from "@/src/theme";
 
@@ -32,13 +33,13 @@ export default function SystemAdminLayout() {
 
       >
 
-        <Tabs.Screen name="dashboard" options={{ title: "Sistem", tabBarIcon: ({ color, size }) => <Ionicons name="shield-checkmark" color={color} size={size} /> }} />
+        <Tabs.Screen name="dashboard" options={{ title: "Sistem", tabBarIcon: ({ size }) => <HospiraMark size={size} /> }} />
 
         <Tabs.Screen name="hotels" options={{ title: "Oteller", tabBarIcon: ({ color, size }) => <Ionicons name="business" color={color} size={size} /> }} />
 
         <Tabs.Screen name="managers" options={{ title: "Manager", tabBarIcon: ({ color, size }) => <Ionicons name="people" color={color} size={size} /> }} />
 
-        <Tabs.Screen name="ai-knowledge" options={{ title: "AI Bilgi", tabBarIcon: ({ color, size }) => <Ionicons name="sparkles" color={color} size={size} /> }} />
+        <Tabs.Screen name="ai-knowledge" options={{ href: null }} />
 
         <Tabs.Screen name="users" options={{ title: "Kullanıcı", tabBarIcon: ({ color, size }) => <Ionicons name="person" color={color} size={size} /> }} />
 

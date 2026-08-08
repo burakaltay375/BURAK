@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AuraStay AI Hotel Management System — Realistic Seed Data
+Hospira AI Hotel Management System — Realistic Seed Data
 
 Inserts rich test data into the EXISTING MongoDB collections used by the app.
 Does NOT modify application code or schema.
@@ -10,8 +10,8 @@ Usage:
   python seed_realistic_data.py --force          # remove previous seed_tag batch, then re-seed
   python seed_realistic_data.py --dry-run        # print plan only
 
-Default login password for all seeded users: AuraStay2026!
-Seed marker field on every inserted doc: seed_tag = "aurastay-realistic-v1"
+Default login password for all seeded users: Hospira2026!
+Seed marker field on every inserted doc: seed_tag = "hospira-realistic-v1"
 
 Notes (schema mapping):
   - Hotels / rooms / users / requests / chat_messages /
@@ -44,8 +44,8 @@ from pymongo import MongoClient, UpdateOne
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
-SEED_TAG = "aurastay-realistic-v1"
-DEFAULT_PASSWORD = "AuraStay2026!"
+SEED_TAG = "hospira-realistic-v1"
+DEFAULT_PASSWORD = "Hospira2026!"
 RNG = random.Random(20260730)  # reproducible
 
 ROOT = Path(__file__).parent
@@ -148,12 +148,14 @@ INTL_GUESTS = [
 
 HOTEL_DEFS = [
     {
-        "slug": "aurastay-grand-istanbul",
-        "hotel_name": "AuraStay Grand Istanbul",
+        "slug": "hospira-grand-istanbul",
+        "hotel_name": "Hospira Grand Istanbul",
         "city": "Istanbul",
         "address": "Abdi İpekçi Cad. No:42, Nişantaşı, Şişli",
+        "latitude": 41.0524,
+        "longitude": 28.9928,
         "phone": "+90 212 555 0101",
-        "email": "grand.istanbul@aurastay.com",
+        "email": "grand.istanbul@hospira.com",
         "description": "Boğaz manzaralı lüks şehir oteli. İş ve VIP seyahatler için ideal.",
         "star_rating": 5,
         "room_count": 180,
@@ -163,8 +165,10 @@ HOTEL_DEFS = [
         "hotel_name": "Bosphorus Elite Hotel",
         "city": "Istanbul",
         "address": "Ciragan Cad. No:18, Beşiktaş",
+        "latitude": 41.0438,
+        "longitude": 29.0153,
         "phone": "+90 212 555 0202",
-        "email": "bosphorus@aurastay.com",
+        "email": "bosphorus@hospira.com",
         "description": "Boğaz kenarında butik elite konaklama, spa ve fine dining.",
         "star_rating": 5,
         "room_count": 95,
@@ -174,8 +178,10 @@ HOTEL_DEFS = [
         "hotel_name": "Blue Horizon Resort",
         "city": "Bodrum",
         "address": "Yalıkavak Mah. Sahil Yolu No:7",
+        "latitude": 37.1060,
+        "longitude": 27.2940,
         "phone": "+90 252 555 0303",
-        "email": "bluehorizon@aurastay.com",
+        "email": "bluehorizon@hospira.com",
         "description": "Ege sahilinde aile dostu resort, kids club ve plaj kulübü.",
         "star_rating": 4,
         "room_count": 220,
@@ -185,8 +191,10 @@ HOTEL_DEFS = [
         "hotel_name": "Cappadocia Cave Suites",
         "city": "Nevşehir",
         "address": "Gaferli Mah. Cave Street No:12, Göreme",
+        "latitude": 38.6431,
+        "longitude": 34.8289,
         "phone": "+90 384 555 0404",
-        "email": "cappadocia@aurastay.com",
+        "email": "cappadocia@hospira.com",
         "description": "Oyma taş mağara süitleri, balon manzarası ve yerel deneyimler.",
         "star_rating": 4,
         "room_count": 80,
@@ -196,8 +204,10 @@ HOTEL_DEFS = [
         "hotel_name": "Antalya Beach Palace",
         "city": "Antalya",
         "address": "Lara Cad. No:88, Muratpaşa",
+        "latitude": 36.8563,
+        "longitude": 30.7866,
         "phone": "+90 242 555 0505",
-        "email": "antalya@aurastay.com",
+        "email": "antalya@hospira.com",
         "description": "Akdeniz kıyısında all-inclusive beach palace, spa ve aquapark.",
         "star_rating": 5,
         "room_count": 250,
@@ -380,6 +390,8 @@ def build_hotels() -> List[dict]:
             "hotel_name": h["hotel_name"],
             "city": h["city"],
             "address": h["address"],
+            "latitude": h["latitude"],
+            "longitude": h["longitude"],
             "country": "Turkey",
             "phone": h["phone"],
             "email": h["email"],
@@ -531,7 +543,7 @@ def build_guests() -> List[dict]:
         prev_stays = RNG.randint(0, 18)
         guests.append(tag({
             "id": uid(),
-            "email": email_of(first, last, "guest.aurastay.com", used_emails, suffix=str(i)),
+            "email": email_of(first, last, "guest.hospira.com", used_emails, suffix=str(i)),
             "password_hash": None,
             "name": f"{first} {last}",
             "first_name": first,
@@ -1199,7 +1211,7 @@ def link_managers(hotels: List[dict], employees: List[dict]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AuraStay realistic seed data")
+    parser = argparse.ArgumentParser(description="Hospira realistic seed data")
     parser.add_argument("--force", action="store_true", help="Delete previous SEED_TAG docs then re-seed")
     parser.add_argument("--dry-run", action="store_true", help="Build data but do not write")
     args = parser.parse_args()
@@ -1290,7 +1302,7 @@ def main() -> None:
     print(f"Invoices:            {len(invoices)}")
     print(f"Analytics months:    {len(analytics)}")
     print(f"Dashboard snaps:     {len(dashboards)}")
-    print("\nSample logins (password = AuraStay2026!):")
+    print("\nSample logins (password = Hospira2026!):")
     for e in employees[:3]:
         print(f"  {e['role']:15} {e['email']:45} hotel={e['hotel_id']}")
     g0 = guests[0]

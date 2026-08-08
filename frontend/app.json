@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "Hospira",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -31,7 +31,8 @@
         {
           "cameraPermission": "Tamamlanan işin fotoğrafını çekmek için"
         }
-      ]
+      ],
+      "expo-video"
     ],
     "ios": {
       "supportsTablet": true,

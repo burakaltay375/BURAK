@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View, Text, TextInput, StyleSheet, Pressable, KeyboardAvoidingView,
   Platform, ScrollView, ActivityIndicator,
@@ -9,6 +9,7 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { api, type Hotel } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
@@ -17,9 +18,10 @@ const HERO = "https://images.unsplash.com/photo-1780283575089-eb917a09a5b1?crop=
 export default function Login() {
   const router = useRouter();
   const { user, loading: authLoading, signIn } = useAuth();
+  const submittingRef = useRef(false);
 
   useEffect(() => {
-    if (!authLoading && user) router.replace(dashboardRouteForRole(user.role));
+    if (!authLoading && user && !submittingRef.current) router.replace(dashboardRouteForRole(user.role));
   }, [user, authLoading, router]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -55,10 +57,15 @@ export default function Login() {
     }
     setErr(null); setLoading(true);
     try {
+      submittingRef.current = true;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const u = await signIn(email.trim(), password, selectedHotelId);
-      router.replace(dashboardRouteForRole(u.role));
+      router.replace({
+        pathname: "/hotel-branding",
+        params: { hotelId: selectedHotelId, next: String(dashboardRouteForRole(u.role)) },
+      });
     } catch (e: any) {
+      submittingRef.current = false;
       setErr(e.message);
     } finally { setLoading(false); }
   };
@@ -79,8 +86,7 @@ export default function Login() {
       <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
           <View style={s.header}>
-            <Text style={s.brandMark}>Astoria</Text>
-            <Text style={s.brandSub}>Akıllı Operasyon Merkezi</Text>
+            <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
           </View>
 
           <View style={s.form}>
@@ -167,8 +173,6 @@ const s = StyleSheet.create({
   kav: { flex: 1 },
   scroll: { flexGrow: 1, justifyContent: "flex-end", padding: SPACING.xl, paddingBottom: SPACING.xl2 },
   header: { marginBottom: SPACING.xl2 },
-  brandMark: { fontSize: 42, color: COLORS.brand, fontFamily: TYPE.display, fontWeight: "700", letterSpacing: 1 },
-  brandSub: { fontSize: 14, color: COLORS.onSurfaceSecondary, marginTop: SPACING.xs, letterSpacing: 2, textTransform: "uppercase" },
   form: { gap: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   subtitle: { fontSize: 14, color: COLORS.onSurfaceSecondary, marginBottom: SPACING.md },

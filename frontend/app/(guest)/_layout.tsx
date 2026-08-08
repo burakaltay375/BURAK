@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { RoleGate } from "@/src/role-guard";
+import { HospiraMark } from "@/src/components/HospiraBrand";
 import { COLORS } from "@/src/theme";
 
 export default function GuestLayout() {
@@ -23,7 +24,14 @@ export default function GuestLayout() {
           name="chat"
           options={{
             title: "Konsiyerj",
-            tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses" color={color} size={size} />,
+            tabBarIcon: ({ size }) => <HospiraMark size={size} />,
+          }}
+        />
+        <Tabs.Screen
+          name="reservations"
+          options={{
+            title: "Rezervasyon",
+            tabBarIcon: ({ color, size }) => <Ionicons name="calendar" color={color} size={size} />,
           }}
         />
         <Tabs.Screen
@@ -38,6 +46,13 @@ export default function GuestLayout() {
           options={{
             title: "Odam",
             tabBarIcon: ({ color, size }) => <Ionicons name="bed" color={color} size={size} />,
+          }}
+        />
+        <Tabs.Screen
+          name="discover"
+          options={{
+            title: "Keşfet",
+            tabBarIcon: ({ color, size }) => <Ionicons name="map" color={color} size={size} />,
           }}
         />
         <Tabs.Screen
