@@ -10,6 +10,7 @@ import * as Haptics from "expo-haptics";
 import { api, resolveApiUrl, type Hotel } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import HospiraBrand from "@/src/components/HospiraBrand";
+import IdleIntroBackground from "@/src/components/IdleIntroBackground";
 import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
@@ -81,12 +82,19 @@ export default function Login() {
   };
 
   return (
-    <View style={s.root} testID="login-screen">
-      <Image source={{ uri: HERO }} style={StyleSheet.absoluteFillObject as any} contentFit="cover" />
-      <LinearGradient
-        colors={["rgba(15,15,17,0)", "rgba(15,15,17,0.6)", "rgba(15,15,17,0.96)"]}
-        style={StyleSheet.absoluteFillObject as any}
-      />
+    <IdleIntroBackground
+      hotel={selectedHotel}
+      background={(
+        <>
+          <Image source={{ uri: HERO }} style={StyleSheet.absoluteFillObject as any} contentFit="cover" />
+          <LinearGradient
+            colors={["rgba(15,15,17,0)", "rgba(15,15,17,0.6)", "rgba(15,15,17,0.96)"]}
+            style={StyleSheet.absoluteFillObject as any}
+          />
+        </>
+      )}
+    >
+      <View style={s.root} testID="login-screen">
       <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
           <View style={s.header}>
@@ -180,12 +188,13 @@ export default function Login() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+      </View>
+    </IdleIntroBackground>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.surface },
+  root: { flex: 1, backgroundColor: "transparent" },
   kav: { flex: 1 },
   scroll: { flexGrow: 1, justifyContent: "flex-end", padding: SPACING.xl, paddingBottom: SPACING.xl2 },
   header: { marginBottom: SPACING.xl2 },

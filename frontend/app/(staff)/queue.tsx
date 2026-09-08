@@ -136,7 +136,7 @@ export default function StaffQueue() {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "transparent" },
+  root: { flex: 1, backgroundColor: COLORS.surface },
   header: { padding: SPACING.lg, paddingBottom: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   sub: { fontSize: 13, color: COLORS.onSurfaceTertiary, marginTop: 4 },

@@ -2,11 +2,9 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { BlurView } from "expo-blur";
-import { useSegments } from "expo-router";
 import { useVideoPlayer, VideoView } from "expo-video";
 
-import { api, resolveApiUrl, type Hotel } from "@/src/api";
-import { useAuth } from "@/src/auth";
+import { resolveApiUrl, type Hotel } from "@/src/api";
 import { COLORS } from "@/src/theme";
 
 const DEFAULT_IDLE_DELAY_MS = 15_000;
@@ -17,21 +15,16 @@ const IDLE_DELAY_MS = Math.max(
 
 type Props = {
   children: ReactNode;
-  homePath: string;
+  hotel: Hotel | null | undefined;
+  background?: ReactNode;
 };
 
-export default function IdleIntroBackground({ children, homePath }: Props) {
-  const { user } = useAuth();
-  const segments = useSegments();
-  const [hotel, setHotel] = useState<Hotel | null>(null);
+export default function IdleIntroBackground({ children, hotel, background }: Props) {
   const [showIntro, setShowIntro] = useState(false);
   const showIntroRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playedSinceInteractionRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
-  const currentScreen = segments[segments.length - 1];
-  const isHome = currentScreen === homePath.replace(/^\//, "");
-  const hotelId = user?.hotel_id || user?.hotelId || null;
   const introUrl = resolveApiUrl(hotel?.intro_video_url);
 
   const player = useVideoPlayer(introUrl, (instance) => {
@@ -52,7 +45,7 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
   }, [player]);
 
   const startIntro = useCallback(() => {
-    if (!introUrl || !isHome || playedSinceInteractionRef.current) return;
+    if (!introUrl || playedSinceInteractionRef.current) return;
     playedSinceInteractionRef.current = true;
     showIntroRef.current = true;
     setShowIntro(true);
@@ -60,13 +53,13 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     player.muted = true;
     player.loop = false;
     player.play();
-  }, [introUrl, isHome, player]);
+  }, [introUrl, player]);
 
   const armIdleTimer = useCallback(() => {
     clearIdleTimer();
-    if (!introUrl || !isHome || playedSinceInteractionRef.current) return;
+    if (!introUrl || playedSinceInteractionRef.current) return;
     timerRef.current = setTimeout(startIntro, IDLE_DELAY_MS);
-  }, [clearIdleTimer, introUrl, isHome, startIntro]);
+  }, [clearIdleTimer, introUrl, startIntro]);
 
   const handleInteraction = useCallback(() => {
     clearIdleTimer();
@@ -87,24 +80,6 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     }
     handleInteraction();
   }, [handleInteraction]);
-
-  useEffect(() => {
-    let alive = true;
-    if (!hotelId) {
-      setHotel(null);
-      return;
-    }
-    api.activeHotels()
-      .then((hotels) => {
-        if (alive) setHotel(hotels.find((item) => item.id === hotelId) ?? null);
-      })
-      .catch(() => {
-        if (alive) setHotel(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [hotelId]);
 
   useEffect(() => {
     hideIntro();
@@ -152,7 +127,9 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
 
   return (
     <View style={styles.root} testID="idle-intro-shell">
-      <View style={styles.baseBackground} />
+      <View pointerEvents="none" style={styles.baseBackground}>
+        {background}
+      </View>
       {showIntro && introUrl && (
         <View
           pointerEvents="none"

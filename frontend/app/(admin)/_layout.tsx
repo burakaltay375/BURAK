@@ -4,7 +4,6 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { RoleGate } from "@/src/role-guard";
 import { HospiraMark } from "@/src/components/HospiraBrand";
-import IdleIntroBackground from "@/src/components/IdleIntroBackground";
 
 import { COLORS } from "@/src/theme";
 
@@ -16,13 +15,11 @@ export default function AdminLayout() {
 
     <RoleGate role="hotel_manager">
 
-      <IdleIntroBackground homePath="/dashboard">
       <Tabs
 
         screenOptions={{
 
           headerShown: false,
-          sceneStyle: { backgroundColor: "transparent" },
 
           tabBarActiveTintColor: COLORS.brand,
 
@@ -55,7 +52,6 @@ export default function AdminLayout() {
         <Tabs.Screen name="profile" options={{ title: "Profil", tabBarIcon: ({ color, size }) => <Ionicons name="person-circle" color={color} size={size} /> }} />
 
       </Tabs>
-      </IdleIntroBackground>
 
     </RoleGate>
 
