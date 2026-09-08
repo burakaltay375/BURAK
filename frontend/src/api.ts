@@ -176,6 +176,7 @@ export type RequestItem = {
   completed_at?: string | null;
   operational_note?: string | null;
   completed_via?: "staff_ai" | "proof_photo" | null;
+  issue_status?: "OPEN" | null;
   created_at: string; updated_at: string;
 };
 

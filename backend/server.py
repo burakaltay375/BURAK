@@ -327,6 +327,7 @@ class RequestOut(BaseModel):
 class ManagerRequestOut(RequestOut):
     operational_note: Optional[str] = None
     completed_via: Optional[str] = None
+    issue_status: Optional[str] = None
 
 class CompleteIn(BaseModel):
     proof_photo: str  # base64 data URI or raw base64
@@ -1074,6 +1075,7 @@ def public_request(r: dict, include_internal: bool = False) -> RequestOut:
         payload.update(
             operational_note=r.get("operational_note"),
             completed_via=r.get("completed_via"),
+            issue_status=r.get("issue_status"),
         )
     return model(**payload)
 
@@ -2424,6 +2426,54 @@ def _completion_action_from_text(message: str) -> Optional[Dict[str, Any]]:
     return {"intent": "complete_task", "room": room, "note": note}
 
 
+def _issue_action_from_text(message: str) -> Optional[Dict[str, Any]]:
+    normalized = normalize_assignment_text(message)
+    if not any(phrase in normalized for phrase in (
+        "tamamlayamadim", "bitmedi", "tamamlanmadi",
+    )):
+        return None
+    room_match = re.search(r"\b(\d{2,4})\b", normalized)
+    if not room_match:
+        return None
+    return {
+        "intent": "report_task_issue",
+        "room": room_match.group(1),
+        "note": " ".join(message.split())[:2000],
+    }
+
+
+async def record_staff_task_issue(user: dict, room_number: str, note: str) -> dict:
+    if role_of(user) != "staff":
+        raise HTTPException(403, "Bu aksiyon yalnızca personel içindir")
+    task = await db.requests.find_one(
+        with_hotel_scope(user, {
+            "assigned_staff_id": user["id"],
+            "room_no": str(room_number).strip(),
+            "status": "PERSONEL_GIDIYOR",
+        }),
+        {"_id": 0},
+        sort=[("updated_at", -1)],
+    )
+    if not task:
+        raise HTTPException(404, f"{room_number} numaralı oda için size atanmış aktif görev bulunamadı")
+    ensure_staff_request_scope(user, task)
+    timestamp = now_iso()
+    await db.requests.update_one(
+        with_hotel_scope(user, {
+            "id": task["id"],
+            "assigned_staff_id": user["id"],
+            "status": "PERSONEL_GIDIYOR",
+        }),
+        {"$set": {
+            "operational_note": note,
+            "issue_status": "OPEN",
+            "issue_reported_at": timestamp,
+            "updated_at": timestamp,
+        }},
+    )
+    return task
+
+
 async def complete_staff_task_from_ai(
     user: dict,
     room_number: str,
@@ -2506,6 +2556,17 @@ async def orchestrate_authenticated_role(
     context = await authenticated_operations_context(user)
     role = role_of(user)
     if role == "staff":
+        issue = _issue_action_from_text(message)
+        if issue:
+            await record_staff_task_issue(user, issue["room"], issue["note"])
+            return {
+                "reply": (
+                    f"Oda {issue['room']} için operasyon sorunu kaydedildi. "
+                    "Görev aktif bırakıldı ve manager ekranında görünür."
+                ),
+                "ready": False,
+                "request": None,
+            }
         action = _completion_action_from_text(message)
         if action:
             task = await complete_staff_task_from_ai(

@@ -39,7 +39,9 @@ export default function AdminAll() {
             <Text style={s.guest}>Misafir: {item.guest_name}</Text>
             {item.assigned_staff_name && <Text style={s.staff}>Görevli: {item.assigned_staff_name}</Text>}
             {item.operational_note && (
-              <Text style={s.note}>Operasyon notu: {item.operational_note}</Text>
+              <Text style={s.note}>
+                {item.issue_status === "OPEN" ? "Açık operasyon sorunu" : "Operasyon notu"}: {item.operational_note}
+              </Text>
             )}
 
             {item.proof_photo ? (
@@ -55,6 +57,8 @@ export default function AdminAll() {
                 </View>
                 <Ionicons name="expand" size={18} color={COLORS.brand} />
               </Pressable>
+            ) : item.status === "TAMAMLANDI" && item.completed_via === "staff_ai" ? (
+              <Text style={s.aiComplete}>Staff AI üzerinden yetki doğrulamasıyla tamamlandı</Text>
             ) : item.status === "TAMAMLANDI" ? (
               <Text style={s.noProof}>⚠ Bu kayıt için kanıt fotoğrafı yok</Text>
             ) : null}
@@ -108,6 +112,7 @@ const s = StyleSheet.create({
   guest: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
   staff: { color: COLORS.brand, fontSize: 12, fontStyle: "italic" },
   note: { color: COLORS.warning, fontSize: 12, marginTop: SPACING.xs },
+  aiComplete: { color: COLORS.success, fontSize: 12, marginTop: SPACING.sm },
   proofRow: { flexDirection: "row", alignItems: "center", gap: SPACING.md, marginTop: SPACING.sm, padding: SPACING.sm, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.brand },
   thumb: { width: 56, height: 56, borderRadius: RADIUS.sm, backgroundColor: COLORS.surfaceTertiary },
   proofLabel: { color: COLORS.brand, fontSize: 13, fontWeight: "700" },
