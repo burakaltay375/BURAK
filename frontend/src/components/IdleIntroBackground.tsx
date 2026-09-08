@@ -28,6 +28,7 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
   const showIntroRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playedSinceInteractionRef = useRef(false);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const currentScreen = segments[segments.length - 1];
   const isHome = currentScreen === homePath.replace(/^\//, "");
   const hotelId = user?.hotel_id || user?.hotelId || null;
@@ -73,6 +74,19 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     playedSinceInteractionRef.current = false;
     armIdleTimer();
   }, [armIdleTimer, clearIdleTimer, hideIntro]);
+
+  const handleMouseMove = useCallback((event: MouseEvent) => {
+    const previous = lastPointerRef.current;
+    lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    if (
+      previous &&
+      Math.abs(previous.x - event.clientX) < 4 &&
+      Math.abs(previous.y - event.clientY) < 4
+    ) {
+      return;
+    }
+    handleInteraction();
+  }, [handleInteraction]);
 
   useEffect(() => {
     let alive = true;
@@ -127,15 +141,24 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     // `scroll` can fire after layout/data refreshes without user input. Wheel,
     // touch and pointer events still cover real scrolling without allowing the
     // dashboard's periodic refresh to keep resetting the idle timer.
-    const events = ["mousemove", "mousedown", "click", "touchstart", "touchmove", "pointerdown", "keydown", "wheel"] as const;
+    const events = ["mousedown", "click", "touchstart", "touchmove", "pointerdown", "keydown", "wheel"] as const;
+    document.addEventListener("mousemove", handleMouseMove, { passive: true, capture: true });
     events.forEach((event) => document.addEventListener(event, handleInteraction, { passive: true, capture: true }));
     return () => {
+      document.removeEventListener("mousemove", handleMouseMove, { capture: true });
       events.forEach((event) => document.removeEventListener(event, handleInteraction, { capture: true }));
     };
-  }, [handleInteraction]);
+  }, [handleInteraction, handleMouseMove]);
 
   return (
-    <View style={styles.root} testID="idle-intro-shell">
+    <View
+      style={styles.root}
+      testID="idle-intro-shell"
+      dataSet={{
+        introReady: introUrl ? "true" : "false",
+        introHome: isHome ? "true" : "false",
+      }}
+    >
       <View style={styles.baseBackground} />
       {showIntro && introUrl && (
         <View
