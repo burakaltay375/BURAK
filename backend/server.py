@@ -2407,6 +2407,12 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
             f"çalışma alanınızda {len(pending)} bekleyen görev bulunuyor. "
             "Görevlerinizi, vardiyanızı veya sorumluluk alanınızı kontrol edebilirim."
         )
+    if any(phrase in normalized for phrase in ("kim yapacak", "kime atandi", "kim sorumlu")):
+        return (
+            f"Size atanmış aktif görevler: {_task_summary(assigned)}."
+            if assigned
+            else "Şu anda size atanmış aktif bir görev bulunmuyor."
+        )
     if "gorev" in normalized and any(
         word in normalized for word in ("bugun", "atan", "goster", "nedir")
     ):
@@ -2553,7 +2559,7 @@ async def complete_staff_task_from_ai(
 
 async def staff_task_reply_for_room(user: dict, message: str) -> Optional[str]:
     normalized = normalize_assignment_text(message)
-    if not any(word in normalized for word in ("gorev", "talep", "oda")):
+    if not any(word in normalized for word in ("gorev", "talep", "oda", "numara", "durum")):
         return None
     room_match = re.search(r"\b(\d{2,4})\b", normalized)
     if not room_match:
@@ -3137,6 +3143,11 @@ async def guest_request_status_reply(user: dict, message: str) -> Optional[str]:
         "TAMAMLANDI": "tamamlandı",
         "REDDEDILDI": "sonuçlandırılamadı",
     }.get(task.get("status"), "işlemde")
+    if task.get("departman") == "housekeeping":
+        return (
+            f"{task['room_no']} numaralı odanızın temizlik talebi "
+            f"{status_text}."
+        )
     return f"{task.get('hizmet_turu') or 'Talebiniz'} {status_text}."
 
 

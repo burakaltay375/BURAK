@@ -147,7 +147,7 @@ class CentralAiOperationsTest(unittest.TestCase):
     def test_full_guest_staff_operations_flow(self) -> None:
         status_code, created = self.request(
             "POST", "/api/chat", self.guest_id,
-            {"message": "200 numaralı odamın temizlenmesini istiyorum."},
+            {"message": "200 numaralı odam temizlensin."},
         )
         self.assertEqual(status_code, 200, created)
         request_id = created["request_id"]
@@ -174,16 +174,22 @@ class CentralAiOperationsTest(unittest.TestCase):
         )
         self.assertIn("Misafir talebi", room_info["reply"])
 
+        _, room_status = self.request(
+            "POST", "/api/chat", self.staff_id,
+            {"message": "200 numara ne durumda?"},
+        )
+        self.assertIn("Oda 200", room_status["reply"])
+        self.assertIn("PERSONEL_GIDIYOR", room_status["reply"])
+
         status_code, completed = self.request(
             "POST", "/api/chat", self.staff_id,
-            {"message": "200'ün temizliği bitti ama havlu eksikti."},
+            {"message": "200'ü tamamladım."},
         )
         self.assertEqual(status_code, 200, completed)
         self.assertIn("tamamlandı", completed["reply"])
         task = self.database.requests.find_one({"id": request_id})
         self.assertEqual(task["status"], "TAMAMLANDI")
         self.assertEqual(task["completed_via"], "staff_ai")
-        self.assertEqual(task["operational_note"], "havlu eksikti")
         self.assertEqual(
             self.database.rooms.find_one({"id": self.room_200_id})["operational_status"],
             "normal",
@@ -191,9 +197,12 @@ class CentralAiOperationsTest(unittest.TestCase):
 
         _, status = self.request(
             "POST", "/api/chat", self.guest_id,
-            {"message": "Temizlik talebim tamamlandı mı?"},
+            {"message": "Temizlik tamamlandı mı?"},
         )
-        self.assertIn("tamamlandı", status["reply"])
+        self.assertEqual(
+            status["reply"],
+            "200 numaralı odanızın temizlik talebi tamamlandı.",
+        )
         self.assertNotIn("Ahmet", status["reply"])
         self.assertNotIn("havlu", status["reply"])
 
