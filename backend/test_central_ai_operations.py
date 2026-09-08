@@ -94,7 +94,7 @@ class CentralAiOperationsTest(unittest.TestCase):
         )
         for _ in range(60):
             try:
-                urllib.request.urlopen(f"{cls.base_url}/api/hotels", timeout=1).read()
+                urllib.request.urlopen(f"{cls.base_url}/api/hotels/active", timeout=1).read()
                 break
             except (urllib.error.URLError, TimeoutError):
                 time.sleep(0.1)
