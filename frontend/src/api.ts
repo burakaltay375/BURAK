@@ -131,6 +131,7 @@ export type HotelServices = Record<string, boolean>;
 export type User = {
   id: string; email: string; name: string; role: Role;
   department?: string | null; position?: string | null; room_no?: string | null;
+  work_area?: string | null; responsibility_description?: string | null;
   gender?: string | null; birth_date?: string | null; age?: number | null;
   nationality?: string | null; country?: string | null; region_city?: string | null;
   hotel_id?: string | null; hotelId?: string | null; guest_type?: GuestType | null; active?: boolean;
@@ -498,9 +499,9 @@ export const api = {
   savePlatformSettings: (b: Record<string, any>) =>
     request<Record<string, any>>("/system/settings", { method: "POST", body: JSON.stringify(b) }),
   listStaff: () => request<User[]>("/manager/staff"),
-  createStaff: (b: { email: string; password: string; name: string; department: string; position?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string }) =>
+  createStaff: (b: { email: string; password: string; name: string; department?: string; position: string; work_area: string; responsibility_description: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string }) =>
     request<User>("/manager/staff", { method: "POST", body: JSON.stringify(b) }),
-  updateStaff: (id: string, b: { name?: string; department?: string; position?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string; active?: boolean }) =>
+  updateStaff: (id: string, b: { name?: string; department?: string; position?: string; work_area?: string; responsibility_description?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string; active?: boolean }) =>
     request<User>(`/manager/staff/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
   deleteStaff: (id: string) => request<{ ok: boolean }>(`/manager/staff/${id}`, { method: "DELETE" }),
   planningStaff: (department?: string) =>

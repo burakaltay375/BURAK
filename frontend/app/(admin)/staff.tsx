@@ -7,22 +7,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { api, type User } from "@/src/api";
 import { COLORS, DEPT_LABEL, RADIUS, SPACING, TYPE } from "@/src/theme";
 
-const DEPARTMENTS = Object.entries(DEPT_LABEL);
-const isManagerPosition = (position?: string | null) => {
-  const value = (position ?? "").toLocaleLowerCase("tr-TR");
-  return value.includes("manager") || value.includes("supervisor") || value.includes("müdür") || value.includes("mudur");
-};
-const departmentPosition = (department: string, manager: boolean) =>
-  `${DEPT_LABEL[department] ?? department} ${manager ? "Müdürü" : "Personel"}`;
-
 export default function AdminStaff() {
   const [staff, setStaff] = useState<User[] | null>(null);
   const [form, setForm] = useState({
     name: "",
     email: "",
     password: "",
-    department: DEPARTMENTS[0]?.[0] ?? "",
-    position: departmentPosition(DEPARTMENTS[0]?.[0] ?? "", false),
+    position: "",
+    work_area: "",
+    responsibility_description: "",
   });
   const [editing, setEditing] = useState<User | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,11 +45,19 @@ export default function AdminStaff() {
         name: form.name.trim(),
         email: form.email.trim(),
         password: form.password,
-        department: form.department,
         position: form.position.trim(),
+        work_area: form.work_area.trim(),
+        responsibility_description: form.responsibility_description.trim(),
       });
       setNotice(`${created.name} çalışan olarak oluşturuldu.`);
-      setForm((f) => ({ ...f, name: "", email: "", password: "", position: departmentPosition(f.department, false) }));
+      setForm({
+        name: "",
+        email: "",
+        password: "",
+        position: "",
+        work_area: "",
+        responsibility_description: "",
+      });
       await load();
     } catch (e: any) {
       setErr(e.message);
@@ -73,8 +74,9 @@ export default function AdminStaff() {
     try {
       await api.updateStaff(editing.id, {
         name: editing.name.trim(),
-        department: editing.department ?? "",
         position: editing.position?.trim() ?? "",
+        work_area: editing.work_area?.trim() ?? "",
+        responsibility_description: editing.responsibility_description?.trim() ?? "",
       });
       setEditing(null);
       await load();
@@ -165,30 +167,36 @@ export default function AdminStaff() {
                 onChangeText={(password) => setForm((f) => ({ ...f, password }))}
                 style={s.input}
               />
-              <Text style={s.label}>Planlama yetkisi</Text>
-              <View style={s.chips}>
-                {[false, true].map((manager) => {
-                  const selected = isManagerPosition(form.position) === manager;
-                  return (
-                    <Pressable key={String(manager)} onPress={() => setForm((f) => ({ ...f, position: departmentPosition(f.department, manager) }))} style={[s.chip, selected && s.chipActive]}>
-                      <Text style={[s.chipText, selected && s.chipTextActive]}>{manager ? "Departman Müdürü" : "Personel"}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <Text style={s.label}>Departman</Text>
-              <View style={s.chips}>
-                {DEPARTMENTS.map(([code, label]) => (
-                  <Pressable
-                    key={code}
-                    testID={`staff-department-${code}`}
-                    onPress={() => setForm((f) => ({ ...f, department: code, position: departmentPosition(code, isManagerPosition(f.position)) }))}
-                    style={[s.chip, form.department === code && s.chipActive]}
-                  >
-                    <Text style={[s.chipText, form.department === code && s.chipTextActive]}>{label}</Text>
-                  </Pressable>
-                ))}
-              </View>
+              <Text style={s.label}>Görev / Pozisyon</Text>
+              <TextInput
+                testID="staff-position-input"
+                placeholder="Örn. Kat Görevlisi"
+                placeholderTextColor={COLORS.onSurfaceTertiary}
+                value={form.position}
+                onChangeText={(position) => setForm((f) => ({ ...f, position }))}
+                style={s.input}
+              />
+              <Text style={s.label}>Çalışma Alanı</Text>
+              <TextInput
+                testID="staff-work-area-input"
+                placeholder="Örn. West Block"
+                placeholderTextColor={COLORS.onSurfaceTertiary}
+                value={form.work_area}
+                onChangeText={(work_area) => setForm((f) => ({ ...f, work_area }))}
+                style={s.input}
+              />
+              <Text style={s.label}>Görev Alanı / Sorumluluk Tanımı</Text>
+              <TextInput
+                testID="staff-responsibility-input"
+                placeholder="Örn. West Block'un 2300'lü odalarının temizliği ve kat hizmetlerinden sorumludur."
+                placeholderTextColor={COLORS.onSurfaceTertiary}
+                value={form.responsibility_description}
+                onChangeText={(responsibility_description) => setForm((f) => ({ ...f, responsibility_description }))}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                style={[s.input, s.textArea]}
+              />
               <Pressable
                 testID="create-staff-button"
                 disabled={busy === "create"}
@@ -211,25 +219,21 @@ export default function AdminStaff() {
               {isEditing && editing ? (
                 <>
                   <TextInput value={editing.name} onChangeText={(name) => setEditing((e) => e && { ...e, name })} style={s.input} placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <Text style={s.label}>Planlama yetkisi</Text>
-                  <View style={s.chips}>
-                    {[false, true].map((manager) => {
-                      const selected = isManagerPosition(editing.position) === manager;
-                      return (
-                        <Pressable key={String(manager)} onPress={() => setEditing((e) => e && { ...e, position: departmentPosition(e.department ?? "", manager) })} style={[s.chip, selected && s.chipActive]}>
-                          <Text style={[s.chipText, selected && s.chipTextActive]}>{manager ? "Departman Müdürü" : "Personel"}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                  <Text style={s.label}>Departman</Text>
-                  <View style={s.chips}>
-                    {DEPARTMENTS.map(([code, label]) => (
-                      <Pressable key={code} onPress={() => setEditing((e) => e && { ...e, department: code, position: departmentPosition(code, isManagerPosition(e.position)) })} style={[s.chip, editing.department === code && s.chipActive]}>
-                        <Text style={[s.chipText, editing.department === code && s.chipTextActive]}>{label}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
+                  <Text style={s.label}>Görev / Pozisyon</Text>
+                  <TextInput value={editing.position ?? ""} onChangeText={(position) => setEditing((e) => e && { ...e, position })} style={s.input} placeholder="Örn. Kat Görevlisi" placeholderTextColor={COLORS.onSurfaceTertiary} />
+                  <Text style={s.label}>Çalışma Alanı</Text>
+                  <TextInput value={editing.work_area ?? ""} onChangeText={(work_area) => setEditing((e) => e && { ...e, work_area })} style={s.input} placeholder="Örn. West Block" placeholderTextColor={COLORS.onSurfaceTertiary} />
+                  <Text style={s.label}>Görev Alanı / Sorumluluk Tanımı</Text>
+                  <TextInput
+                    value={editing.responsibility_description ?? ""}
+                    onChangeText={(responsibility_description) => setEditing((e) => e && { ...e, responsibility_description })}
+                    style={[s.input, s.textArea]}
+                    placeholder="Personelin sorumlu olduğu blok, oda, restoran veya masaları yazın"
+                    placeholderTextColor={COLORS.onSurfaceTertiary}
+                    multiline
+                    numberOfLines={4}
+                    textAlignVertical="top"
+                  />
                   <View style={s.actions}>
                     <Pressable onPress={saveEdit} disabled={busy === item.id} style={s.actionBtn}><Text style={s.actionText}>Kaydet</Text></Pressable>
                     <Pressable onPress={() => setEditing(null)} style={s.actionBtn}><Text style={s.actionText}>İptal</Text></Pressable>
@@ -241,8 +245,10 @@ export default function AdminStaff() {
                     <View style={{ flex: 1 }}>
                       <Text style={s.name}>{item.name}</Text>
                       <Text style={s.meta}>{item.email}</Text>
-                      <Text style={s.meta}>{DEPT_LABEL[item.department ?? ""] ?? item.department}</Text>
-                      <Text style={s.meta}>{item.position || "Pozisyon belirtilmemiş"}</Text>
+                      <Text style={s.meta}>Görev: {item.position || "Belirtilmemiş"}</Text>
+                      <Text style={s.meta}>Çalışma alanı: {item.work_area || "Belirtilmemiş"}</Text>
+                      <Text style={s.meta}>Sorumluluk: {item.responsibility_description || "Belirtilmemiş"}</Text>
+                      <Text style={s.meta}>Operasyon grubu: {DEPT_LABEL[item.department ?? ""] ?? item.department}</Text>
                     </View>
                     <Text style={[s.badge, item.active === false ? s.inactive : s.active]}>
                       {item.active === false ? "Pasif" : "Aktif"}
@@ -283,11 +289,7 @@ const s = StyleSheet.create({
   formTitle: { color: COLORS.onSurface, fontSize: 16, fontWeight: "700", fontFamily: TYPE.display },
   label: { color: COLORS.onSurfaceTertiary, fontSize: 12, letterSpacing: 1, textTransform: "uppercase" },
   input: { backgroundColor: COLORS.surface, color: COLORS.onSurface, borderRadius: RADIUS.md, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, fontSize: 15, borderWidth: 1, borderColor: COLORS.border },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
-  chip: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.pill, paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, backgroundColor: COLORS.surface },
-  chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
-  chipText: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
-  chipTextActive: { color: COLORS.onBrandPrimary, fontWeight: "700" },
+  textArea: { minHeight: 110 },
   primaryBtn: { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingVertical: SPACING.md, alignItems: "center" },
   primaryText: { color: COLORS.onBrandPrimary, fontWeight: "700" },
   disabled: { opacity: 0.65 },

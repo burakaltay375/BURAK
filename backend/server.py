@@ -19,6 +19,7 @@ import string
 import secrets
 import base64
 import time
+import unicodedata
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -250,6 +251,8 @@ class UserPublic(BaseModel):
     role: Role
     department: Optional[str] = None
     position: Optional[str] = None
+    work_area: Optional[str] = None
+    responsibility_description: Optional[str] = None
     room_no: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
@@ -535,8 +538,10 @@ class StaffCreateIn(BaseModel):
     email: str
     password: str
     name: str
-    department: str
-    position: Optional[str] = None
+    department: Optional[str] = None
+    position: str
+    work_area: str
+    responsibility_description: str
     gender: Optional[str] = None
     birth_date: Optional[str] = None
     nationality: Optional[str] = None
@@ -547,6 +552,8 @@ class StaffUpdateIn(BaseModel):
     name: Optional[str] = None
     department: Optional[str] = None
     position: Optional[str] = None
+    work_area: Optional[str] = None
+    responsibility_description: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
     nationality: Optional[str] = None
@@ -574,6 +581,8 @@ class UserAdminOut(BaseModel):
     role: Role
     department: Optional[str] = None
     position: Optional[str] = None
+    work_area: Optional[str] = None
+    responsibility_description: Optional[str] = None
     room_no: Optional[str] = None
     gender: Optional[str] = None
     birth_date: Optional[str] = None
@@ -1026,6 +1035,7 @@ def public_user(u: dict) -> UserPublic:
     return UserPublic(
         id=u["id"], email=u["email"], name=u["name"], role=role_of(u),
         department=u.get("department"), position=u.get("position"), room_no=u.get("room_no"),
+        work_area=u.get("work_area"), responsibility_description=u.get("responsibility_description"),
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
         hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
@@ -1037,6 +1047,7 @@ def public_admin_user(u: dict) -> UserAdminOut:
     return UserAdminOut(
         id=u["id"], email=u["email"], name=u["name"], role=role_of(u),
         department=u.get("department"), position=u.get("position"), room_no=u.get("room_no"),
+        work_area=u.get("work_area"), responsibility_description=u.get("responsibility_description"),
         gender=u.get("gender"), birth_date=u.get("birth_date"), age=calculate_age(u.get("birth_date")),
         nationality=u.get("nationality"), country=u.get("country"), region_city=u.get("region_city"),
         hotel_id=hid, hotelId=hid, guest_type=u.get("guest_type"),
@@ -1625,6 +1636,203 @@ def staff_department(u: dict) -> str:
     return dept
 
 
+STAFF_DEPARTMENT_KEYWORDS = {
+    "housekeeping": (
+        "kat gorevlisi", "housekeeping", "oda temizligi", "temizlik personeli",
+        "temizlikci", "maid",
+    ),
+    "teknik_destek": (
+        "teknik", "bakim", "elektrik", "tesisat", "maintenance",
+    ),
+    "oda_servisi": (
+        "oda servisi", "room service", "mutfak", "asci", "servis personeli",
+    ),
+    "kuru_temizleme": (
+        "kuru temizleme", "camasir", "utu", "laundry",
+    ),
+    "vale": ("vale", "otopark", "park gorevlisi"),
+    "concierge": (
+        "resepsiyon", "reception", "concierge", "garson", "waiter", "restoran",
+        "restaurant", "bar", "bellboy", "belboy", "misafir iliskileri",
+    ),
+}
+
+STAFF_SCOPE_MAX_LENGTHS = {
+    "position": 160,
+    "work_area": 300,
+    "responsibility_description": 2000,
+}
+
+_BLOCK_ALIASES = {
+    "west": "west", "bati": "west",
+    "east": "east", "dogu": "east",
+    "north": "north", "kuzey": "north",
+    "south": "south", "guney": "south",
+}
+
+_VENUE_ALIASES = {
+    "restoran": "restaurant", "restaurant": "restaurant",
+    "resepsiyon": "reception", "reception": "reception",
+    "lobi": "lobby", "lobby": "lobby", "bar": "bar",
+}
+
+
+def normalize_assignment_text(value: Optional[str]) -> str:
+    text = unicodedata.normalize("NFKD", (value or "").casefold()).replace("ı", "i")
+    return " ".join("".join(ch for ch in text if not unicodedata.combining(ch)).split())
+
+
+def clean_staff_scope_field(field: str, value: Optional[str], required: bool = True) -> Optional[str]:
+    cleaned = " ".join((value or "").split())
+    if required and not cleaned:
+        labels = {
+            "position": "Görev",
+            "work_area": "Çalışma alanı",
+            "responsibility_description": "Görev alanı / sorumluluk tanımı",
+        }
+        raise HTTPException(400, f"{labels[field]} zorunludur")
+    if len(cleaned) > STAFF_SCOPE_MAX_LENGTHS[field]:
+        raise HTTPException(400, f"{field} alanı çok uzun")
+    return cleaned or None
+
+
+def infer_staff_department(
+    position: Optional[str],
+    work_area: Optional[str],
+    responsibility_description: Optional[str],
+    explicit_department: Optional[str] = None,
+) -> str:
+    if explicit_department:
+        if explicit_department not in DEPARTMENTS:
+            raise HTTPException(400, "Geçerli bir departman seçin")
+        return explicit_department
+    context = normalize_assignment_text(
+        " ".join(filter(None, (position, work_area, responsibility_description)))
+    )
+    for department, keywords in STAFF_DEPARTMENT_KEYWORDS.items():
+        if any(keyword in context for keyword in keywords):
+            return department
+    raise HTTPException(
+        400,
+        "Görev tanımından operasyon departmanı belirlenemedi. Görevi daha açık yazın.",
+    )
+
+
+def _extract_blocks(text: str) -> set[str]:
+    pattern = r"\b(west|east|north|south|bati|dogu|kuzey|guney)\s*(?:block\w*|blo(?:k|g)\w*|wing\w*|kanat\w*)"
+    return {_BLOCK_ALIASES[match] for match in re.findall(pattern, text)}
+
+
+def _extract_venues(text: str) -> set[str]:
+    pattern = r"\b([a-z0-9]+)\s+(restoran\w*|restaurant\w*|resepsiyon\w*|reception\w*|lobi\w*|lobby\w*|bar\w*)"
+    venues: set[str] = set()
+    for name, raw_type in re.findall(pattern, text):
+        venue_type = next(
+            (canonical for prefix, canonical in _VENUE_ALIASES.items() if raw_type.startswith(prefix)),
+            raw_type,
+        )
+        venues.add(f"{name}:{venue_type}")
+    return venues
+
+
+def _extract_room_ranges(text: str) -> list[tuple[int, int]]:
+    ranges = [
+        (min(int(start), int(end)), max(int(start), int(end)))
+        for start, end in re.findall(r"\b(\d{3,4})\s*[-–]\s*(\d{3,4})\b", text)
+    ]
+    for prefix in re.findall(r"\b(\d{2})(?:00)?\s*'?\s*l[ui]\b", text):
+        start = int(prefix) * 100
+        ranges.append((start, start + 99))
+    for room in re.findall(r"\b(\d{4})\s+numarali\s+odalar", text):
+        start = int(room)
+        ranges.append((start, start + 99 if start % 100 == 0 else start))
+    return ranges
+
+
+def _extract_target_rooms(request: dict) -> set[int]:
+    values = [str(request.get("room_no") or "")]
+    values.extend(
+        str(request.get(key) or "")
+        for key in ("detay", "hizmet_turu")
+    )
+    return {
+        int(room)
+        for value in values
+        for room in re.findall(r"\b\d{3,4}\b", normalize_assignment_text(value))
+    }
+
+
+def _extract_table_ranges(text: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    patterns = (
+        r"\b(\d{1,3})\s*[-–]\s*(\d{1,3})\s+numarali\s+masa",
+        r"\bmasa(?:lar)?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})",
+    )
+    for pattern in patterns:
+        for start, end in re.findall(pattern, text):
+            ranges.append((min(int(start), int(end)), max(int(start), int(end))))
+    return ranges
+
+
+def staff_request_scope_compatibility(staff: dict, request: dict) -> tuple[bool, Optional[str]]:
+    if staff.get("department") != request.get("departman"):
+        return False, "Personelin görevi talep türüyle uyuşmuyor"
+
+    scope = normalize_assignment_text(
+        " ".join(filter(None, (
+            staff.get("work_area"),
+            staff.get("responsibility_description"),
+        )))
+    )
+    if not scope:
+        return True, None  # Existing records remain usable until their scope is defined.
+
+    target = normalize_assignment_text(" ".join(filter(None, (
+        str(request.get("room_no") or ""),
+        request.get("hizmet_turu"),
+        request.get("detay"),
+    ))))
+    scope_blocks = _extract_blocks(scope)
+    target_blocks = _extract_blocks(target)
+    room_ranges = _extract_room_ranges(scope)
+    target_rooms = _extract_target_rooms(request)
+
+    if scope_blocks and target_blocks and scope_blocks.isdisjoint(target_blocks):
+        return False, "Görev bloğu personelin çalışma alanı dışında"
+    if room_ranges:
+        if not target_rooms:
+            return False, "Görevin oda bilgisi personelin sorumluluk aralığıyla doğrulanamadı"
+        if any(not any(start <= room <= end for start, end in room_ranges) for room in target_rooms):
+            return False, "Görev odası personelin sorumluluk aralığı dışında"
+    if scope_blocks and not target_blocks and not room_ranges:
+        return False, "Görevin bloğu personelin çalışma alanıyla doğrulanamadı"
+
+    scope_venues = _extract_venues(scope)
+    target_venues = _extract_venues(target)
+    if scope_venues and target_venues and scope_venues.isdisjoint(target_venues):
+        return False, "Görev noktası personelin çalışma alanı dışında"
+    if scope_venues and not target_venues and not room_ranges:
+        return False, "Görev noktası personelin çalışma alanıyla doğrulanamadı"
+
+    table_ranges = _extract_table_ranges(scope)
+    target_tables = {
+        int(table)
+        for table in re.findall(r"\b(?:masa|table)\s*(\d{1,3})\b", target)
+    }
+    if table_ranges and target_tables and any(
+        not any(start <= table <= end for start, end in table_ranges)
+        for table in target_tables
+    ):
+        return False, "Görev masası personelin sorumluluk aralığı dışında"
+    return True, None
+
+
+def ensure_staff_request_scope(staff: dict, request: dict) -> None:
+    compatible, reason = staff_request_scope_compatibility(staff, request)
+    if not compatible:
+        raise HTTPException(400, reason or "Personel bu görev alanı için uygun değil")
+
+
 def can_manage_department_plans(u: dict) -> bool:
     if role_of(u) == "hotel_manager":
         return True
@@ -1887,6 +2095,7 @@ AKILLI YÖNLENDİRME KURALLARI:
 8. Departman SADECE bu 5'ten biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale.
 9. ASLA alakasız fiyat listeleri veya menüler dökme. Yalnızca misafirin sorduğu ürün/hizmete odaklan. Misafir açıkça tüm menüyü veya fiyat listesini istemedikçe toplu liste verme. İstek belirsizse açıklama iste.
 10. Samimi ve doğal olmak için ASLA bilgi uydurma. Otel hakkında yalnızca sağlanan AI_KNOWLEDGE_BASE ve aktif servis verisini kullan; bilgi yoksa açıkça söyle ve resepsiyona yönlendir.
+11. Misafirin belirttiği blok, kanat, restoran, resepsiyon noktası, oda veya masa bilgisini "detay" alanında eksiksiz koru. Bu bilgiler personel görev alanı güvenlik kontrolünde kullanılacaktır.
 
 YANIT FORMATI (HER ZAMAN sadece geçerli JSON, başka metin yok):
 {
@@ -2592,7 +2801,11 @@ async def department_queue(u: dict = Depends(get_current_user)):
     docs = await db.requests.find(
         with_hotel_scope(u, {"departman": dept, "status": "ALINDI"}), {"_id": 0}
     ).sort("created_at", 1).to_list(200)
-    docs = [d for d in docs if is_request_service_enabled(services, d)]
+    docs = [
+        d for d in docs
+        if is_request_service_enabled(services, d)
+        and staff_request_scope_compatibility(u, d)[0]
+    ]
     return [public_request(d) for d in docs]
 
 @api.get("/requests/active", response_model=List[RequestOut])
@@ -2640,6 +2853,7 @@ async def accept_request(req_id: str, u: dict = Depends(get_current_user)):
         raise HTTPException(403, "Departman uyuşmuyor")
     if r["status"] != "ALINDI":
         raise HTTPException(400, "Bu talep zaten işlenmiş")
+    ensure_staff_request_scope(u, r)
     r = await _update_status(req_id, "PERSONEL_GIDIYOR", u)
     return public_request(r)
 
@@ -3223,18 +3437,26 @@ async def manager_list_staff(u: dict = Depends(get_current_user)):
 async def manager_create_staff(body: StaffCreateIn, u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
     validate_password(body.password)
-    if body.department not in DEPARTMENTS:
-        raise HTTPException(400, "Geçerli bir departman seçin")
     if await db.users.find_one({"email": body.email.lower()}):
         raise HTTPException(409, "Bu e-posta zaten kayıtlı")
+    position = clean_staff_scope_field("position", body.position)
+    work_area = clean_staff_scope_field("work_area", body.work_area)
+    responsibility_description = clean_staff_scope_field(
+        "responsibility_description", body.responsibility_description
+    )
+    department = infer_staff_department(
+        position, work_area, responsibility_description, body.department
+    )
     staff = {
         "id": str(uuid.uuid4()),
         "email": body.email.lower(),
         "password_hash": hash_password(body.password),
         "name": body.name.strip(),
         "role": "staff",
-        "department": body.department,
-        "position": (body.position or "").strip() or None,
+        "department": department,
+        "position": position,
+        "work_area": work_area,
+        "responsibility_description": responsibility_description,
         "room_no": None,
         "gender": body.gender.strip() if body.gender else None,
         "birth_date": validate_birth_date(body.birth_date) if body.birth_date else None,
@@ -3255,13 +3477,21 @@ async def manager_create_staff(body: StaffCreateIn, u: dict = Depends(get_curren
 async def manager_update_staff(staff_id: str, body: StaffUpdateIn, u: dict = Depends(get_current_user)):
     require_roles(u, "hotel_manager")
     update = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
-    if update.get("department") and update["department"] not in DEPARTMENTS:
-        raise HTTPException(400, "Geçerli bir departman seçin")
     if "birth_date" in update:
         update["birth_date"] = validate_birth_date(update["birth_date"])
     current_staff = await db.users.find_one(with_hotel_scope(u, {"id": staff_id, "role": "staff"}), {"_id": 0})
     if not current_staff:
         raise HTTPException(404, "Personel bulunamadı")
+    for field in ("position", "work_area", "responsibility_description"):
+        if field in update:
+            update[field] = clean_staff_scope_field(field, update[field])
+    if any(field in update for field in ("department", "position", "work_area", "responsibility_description")):
+        update["department"] = infer_staff_department(
+            update.get("position", current_staff.get("position")),
+            update.get("work_area", current_staff.get("work_area")),
+            update.get("responsibility_description", current_staff.get("responsibility_description")),
+            update.get("department"),
+        )
     for key in ("name", "position", "gender", "nationality", "country", "region_city"):
         if key in update:
             update[key] = update[key].strip() if isinstance(update[key], str) else update[key]
@@ -3342,6 +3572,12 @@ async def create_department_schedule(body: DepartmentScheduleIn, u: dict = Depen
         planning_department(u, department, require_edit=True)
     employee = await planning_employee(u, body.employee_id, department)
     validate_schedule_values(body.date, body.start_time, body.end_time, body.task)
+    ensure_staff_request_scope(employee, {
+        "departman": department,
+        "room_no": "",
+        "hizmet_turu": body.task,
+        "detay": body.task,
+    })
     conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
         "employee_id": body.employee_id,
         "date": body.date,
@@ -3393,6 +3629,12 @@ async def update_department_schedule(
     end_time = body.end_time or current.get("end_time")
     task = body.task if body.task is not None else current.get("task") or current.get("shift") or ""
     validate_schedule_values(date, start_time, end_time, task)
+    ensure_staff_request_scope(employee, {
+        "departman": department,
+        "room_no": "",
+        "hizmet_turu": task,
+        "detay": task,
+    })
     conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
         "id": {"$ne": schedule_id},
         "employee_id": employee_id,
@@ -3514,6 +3756,7 @@ async def manager_assign_task(req_id: str, body: AssignTaskIn, u: dict = Depends
         raise HTTPException(404, "Personel bulunamadı")
     if staff.get("department") != req.get("departman"):
         raise HTTPException(400, "Personel departmanı talep departmanıyla uyuşmuyor")
+    ensure_staff_request_scope(staff, req)
     await db.requests.update_one(
         with_hotel_scope(u, {"id": req_id}),
         {"$set": {
