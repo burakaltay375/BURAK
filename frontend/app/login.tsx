@@ -7,7 +7,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { api, type Hotel } from "@/src/api";
+import { api, resolveApiUrl, type Hotel } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import HospiraBrand from "@/src/components/HospiraBrand";
 import { dashboardRouteForRole } from "@/src/roles";
@@ -30,6 +30,13 @@ export default function Login() {
   const [hotelsLoading, setHotelsLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
+  const selectedHotel = hotels.find((hotel) => hotel.id === selectedHotelId);
+  const selectedLogoUrl = resolveApiUrl(selectedHotel?.logo_url);
+
+  useEffect(() => {
+    setFailedLogoUrl(null);
+  }, [selectedLogoUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +90,19 @@ export default function Login() {
       <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
           <View style={s.header}>
-            <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
+            {selectedLogoUrl && failedLogoUrl !== selectedLogoUrl ? (
+              <Image
+                source={{ uri: selectedLogoUrl }}
+                style={s.hotelLogo}
+                contentFit="contain"
+                contentPosition="left center"
+                testID={`login-hotel-logo-${selectedHotel?.id}`}
+                accessibilityLabel={`${selectedHotel?.hotel_name ?? "Otel"} logosu`}
+                onError={() => setFailedLogoUrl(selectedLogoUrl)}
+              />
+            ) : (
+              <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
+            )}
           </View>
 
           <View style={s.form}>
@@ -170,6 +189,7 @@ const s = StyleSheet.create({
   kav: { flex: 1 },
   scroll: { flexGrow: 1, justifyContent: "flex-end", padding: SPACING.xl, paddingBottom: SPACING.xl2 },
   header: { marginBottom: SPACING.xl2 },
+  hotelLogo: { width: 220, maxWidth: "80%", height: 72 },
   form: { gap: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   subtitle: { fontSize: 14, color: COLORS.onSurfaceSecondary, marginBottom: SPACING.md },
