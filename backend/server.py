@@ -324,6 +324,10 @@ class RequestOut(BaseModel):
     created_at: str
     updated_at: str
 
+class ManagerRequestOut(RequestOut):
+    operational_note: Optional[str] = None
+    completed_via: Optional[str] = None
+
 class CompleteIn(BaseModel):
     proof_photo: str  # base64 data URI or raw base64
 
@@ -1054,8 +1058,9 @@ def public_admin_user(u: dict) -> UserAdminOut:
         active=u.get("active", True),
     )
 
-def public_request(r: dict) -> RequestOut:
-    return RequestOut(
+def public_request(r: dict, include_internal: bool = False) -> RequestOut:
+    model = ManagerRequestOut if include_internal else RequestOut
+    payload = dict(
         id=r["id"], guest_id=r["guest_id"], guest_name=r["guest_name"],
         room_no=r["room_no"], departman=r["departman"], hizmet_turu=r["hizmet_turu"],
         service_key=r.get("service_key"), zaman=r["zaman"], detay=r["detay"], oncelik=r["oncelik"], status=r["status"],
@@ -1065,6 +1070,12 @@ def public_request(r: dict) -> RequestOut:
         completed_at=r.get("completed_at"),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
+    if include_internal:
+        payload.update(
+            operational_note=r.get("operational_note"),
+            completed_via=r.get("completed_via"),
+        )
+    return model(**payload)
 
 def public_hotel(h: dict) -> "HotelOut":
     branding = h.get("branding") if isinstance(h.get("branding"), dict) else {}
@@ -1789,6 +1800,7 @@ def staff_request_scope_compatibility(staff: dict, request: dict) -> tuple[bool,
 
     target = normalize_assignment_text(" ".join(filter(None, (
         str(request.get("room_no") or ""),
+        request.get("room_area"),
         request.get("hizmet_turu"),
         request.get("detay"),
     ))))
@@ -2037,6 +2049,7 @@ DEPT_KEYWORDS = {
         # Temizlik / textile
         "havlu", "çarşaf", "carsaf", "temizlik", "yatak", "tuvalet kağıdı", "sabun",
         "şampuan", "sampuan", "oda temizliği", "diş fırçası", "terlik",
+        "mini bar", "minibar", "yastık", "yastik",
     ],
     "vale": ["vale", "araba", "araç", "park", "otopark", "anahtar"],
 }
@@ -2056,6 +2069,10 @@ def rule_based_extract(text: str) -> Dict[str, Any]:
             out["hizmet_turu"] = DEPARTMENTS[dept]
             break
     m = re.search(r"oda\s*(?:no(?:su)?\s*[:\-]?\s*)?(\d{2,4})", t)
+    if not m:
+        m = re.search(r"\b(\d{2,4})(?:'?[dt][ea])\b", t)
+    if not m:
+        m = re.search(r"\b(\d{2,4})\s+numaralı\s+oda", t)
     if m:
         out["oda_no"] = m.group(1)
     m = re.search(r"(\d{1,2})[:\.](\d{2})", t)
@@ -2120,9 +2137,12 @@ Yalnızca sistem tarafından verilen PERSONEL_OPERASYON_CONTEXT verisini kullan;
 vardiya veya sorumluluk uydurma.
 Rezervasyon yapmayı, oda servisi siparişi vermeyi veya otel hizmetlerinden misafir gibi
 yararlanmayı teklif etme. Misafir talebi oluşturma.
+Personel atanmış bir görevi tamamladığını açıkça söylüyorsa request yerine action alanında
+{"intent":"complete_task","room":"oda numarası","note":"varsa operasyon notu"} döndür.
+Veritabanını değiştirdiğini iddia etme; action backend tarafından ayrıca doğrulanacaktır.
 Yanıtın kısa, doğrudan ve personel odaklı olsun.
 Sadece şu JSON biçiminde yanıt ver:
-{"reply":"<personel odaklı yanıt>","ready":false,"request":null}"""
+{"reply":"<personel odaklı yanıt>","ready":false,"request":null,"action":null|{"intent":"complete_task","room":"200","note":null}}"""
 
 MANAGER_AI_SYSTEM_PROMPT = """Sen Hospira hotel manager dahili operasyon asistanısın.
 Kullanıcı authenticated bir hotel manager'dır. Otel operasyonları, personel, görevler,
@@ -2383,6 +2403,99 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
         "alanınızı veya uygulanacak otel prosedürünü sorabilirsiniz."
     )
 
+def _completion_action_from_text(message: str) -> Optional[Dict[str, Any]]:
+    normalized = normalize_assignment_text(message)
+    if any(phrase in normalized for phrase in ("tamamlayamadim", "bitmedi", "tamamlanmadi")):
+        return None
+    patterns = (
+        r"\b(\d{2,4})'?(?:un|in|nin)?(?: numarali oda(?:yi)?)?.{0,30}(?:temizligi bitti|temizledim|bitti|tamamlandi)\b",
+        r"\b(?:oda\s*)?(\d{2,4}).{0,20}(?:tamamladim|bitirdim)\b",
+    )
+    room = next(
+        (match.group(1) for pattern in patterns if (match := re.search(pattern, normalized))),
+        None,
+    )
+    if not room:
+        return None
+    note = None
+    note_match = re.search(r"\bama\b(.+)$", message, re.IGNORECASE)
+    if note_match:
+        note = note_match.group(1).strip(" .")
+    return {"intent": "complete_task", "room": room, "note": note}
+
+
+async def complete_staff_task_from_ai(
+    user: dict,
+    room_number: str,
+    note: Optional[str] = None,
+) -> dict:
+    if role_of(user) != "staff":
+        raise HTTPException(403, "Bu aksiyon yalnızca personel içindir")
+    task = await db.requests.find_one(
+        with_hotel_scope(user, {
+            "assigned_staff_id": user["id"],
+            "room_no": str(room_number).strip(),
+            "status": "PERSONEL_GIDIYOR",
+        }),
+        {"_id": 0},
+        sort=[("updated_at", -1)],
+    )
+    if not task:
+        raise HTTPException(404, f"{room_number} numaralı oda için size atanmış aktif görev bulunamadı")
+    ensure_staff_request_scope(user, task)
+    timestamp = now_iso()
+    update: Dict[str, Any] = {
+        "status": "TAMAMLANDI",
+        "updated_at": timestamp,
+        "completed_at": timestamp,
+        "completed_via": "staff_ai",
+    }
+    clean_note = " ".join((note or "").split())
+    if clean_note:
+        update["operational_note"] = clean_note[:2000]
+    result = await db.requests.update_one(
+        with_hotel_scope(user, {
+            "id": task["id"],
+            "assigned_staff_id": user["id"],
+            "status": "PERSONEL_GIDIYOR",
+        }),
+        {"$set": update},
+    )
+    if result.modified_count != 1:
+        raise HTTPException(409, "Görev durumu değişti; lütfen görevlerinizi yenileyin")
+    if task.get("departman") == "housekeeping":
+        await db.rooms.update_one(
+            with_hotel_scope(user, {"room_number": task["room_no"]}),
+            {"$set": {"operational_status": "normal", "updated_at": timestamp}},
+        )
+    return {**task, **update}
+
+
+async def staff_task_reply_for_room(user: dict, message: str) -> Optional[str]:
+    normalized = normalize_assignment_text(message)
+    if not any(word in normalized for word in ("gorev", "talep", "oda")):
+        return None
+    room_match = re.search(r"\b(\d{2,4})\b", normalized)
+    if not room_match:
+        return None
+    room = room_match.group(1)
+    task = await db.requests.find_one(
+        with_hotel_scope(user, {
+            "assigned_staff_id": user["id"],
+            "room_no": room,
+            "status": {"$in": ["PERSONEL_GIDIYOR", "TAMAMLANDI"]},
+        }),
+        {"_id": 0},
+        sort=[("updated_at", -1)],
+    )
+    if not task:
+        return f"{room} numaralı oda için size atanmış bir görev bulunmuyor."
+    return (
+        f"Oda {room}: {task.get('hizmet_turu') or 'Operasyon görevi'}. "
+        f"Kaynak: {'Misafir talebi' if task.get('source') == 'guest_ai' else 'Operasyon sistemi'}. "
+        f"Durum: {task.get('status')}."
+    )
+
 
 async def orchestrate_authenticated_role(
     session_id: str,
@@ -2392,6 +2505,27 @@ async def orchestrate_authenticated_role(
 ) -> Dict[str, Any]:
     context = await authenticated_operations_context(user)
     role = role_of(user)
+    if role == "staff":
+        action = _completion_action_from_text(message)
+        if action:
+            task = await complete_staff_task_from_ai(
+                user, action["room"], action.get("note")
+            )
+            note_suffix = (
+                f" Operasyon notunuz kaydedildi: {action['note']}."
+                if action.get("note") else ""
+            )
+            return {
+                "reply": (
+                    f"Oda {task['room_no']} için {task['hizmet_turu']} görevi "
+                    f"tamamlandı olarak güncellendi.{note_suffix}"
+                ),
+                "ready": False,
+                "request": None,
+            }
+        room_reply = await staff_task_reply_for_room(user, message)
+        if room_reply:
+            return {"reply": room_reply, "ready": False, "request": None}
     prompt = {
         "staff": STAFF_AI_SYSTEM_PROMPT,
         "hotel_manager": MANAGER_AI_SYSTEM_PROMPT,
@@ -2404,6 +2538,22 @@ async def orchestrate_authenticated_role(
                 f"{json.dumps(context, ensure_ascii=False, default=str)}"
             )
             result = await call_llm(session_id, message, history, system_message)
+            action = result.get("action") if role == "staff" else None
+            if isinstance(action, dict) and action.get("intent") == "complete_task":
+                room = str(action.get("room") or "").strip()
+                if not room:
+                    raise ValueError("Staff AI complete_task action has no room")
+                task = await complete_staff_task_from_ai(
+                    user, room, action.get("note")
+                )
+                return {
+                    "reply": (
+                        f"Oda {task['room_no']} için {task['hizmet_turu']} görevi "
+                        "backend doğrulamasıyla tamamlandı."
+                    ),
+                    "ready": False,
+                    "request": None,
+                }
             return {
                 "reply": str(result.get("reply") or "").strip(),
                 "ready": False,
@@ -2756,6 +2906,149 @@ async def me(u: dict = Depends(get_current_user)):
 # --------------------------------------------------------------------------
 # Chat / Orchestrator
 # --------------------------------------------------------------------------
+async def validate_guest_request_room(user: dict, requested_room: str) -> dict:
+    if role_of(user) != "guest":
+        raise HTTPException(403, "Operasyon talebini yalnızca misafir oluşturabilir")
+    registered_room = str(user.get("room_no") or "").strip()
+    room_number = str(requested_room or "").strip()
+    if not registered_room:
+        raise HTTPException(403, "Aktif konaklama odası bulunamadı")
+    if room_number != registered_room:
+        raise HTTPException(403, "Yalnızca konakladığınız oda için talep oluşturabilirsiniz")
+    room = await db.rooms.find_one(
+        with_hotel_scope(user, {
+            "room_number": room_number,
+            "is_active": {"$ne": False},
+        }),
+        {"_id": 0},
+    )
+    if not room:
+        raise HTTPException(403, "Oda bu otelde aktif bir konaklama odası olarak doğrulanamadı")
+    active_guest = await active_room_guest(room)
+    if not active_guest or active_guest.get("id") != user["id"]:
+        raise HTTPException(403, "Oda konaklama sahipliği doğrulanamadı")
+    return room
+
+
+async def _staff_shift_rank(staff: dict) -> Optional[int]:
+    now = datetime.now(timezone.utc)
+    schedules = await db.staff_schedules.find(
+        with_hotel_scope(staff, {
+            "employee_id": staff["id"],
+            "date": now.date().isoformat(),
+            "status": "Approved",
+        }),
+        {"_id": 0},
+    ).to_list(50)
+    if not schedules:
+        return 1  # Existing staff without a published schedule remains assignable.
+    current_time = now.strftime("%H:%M")
+    return 0 if any(
+        schedule.get("start_time", "") <= current_time <= schedule.get("end_time", "")
+        for schedule in schedules
+    ) else None
+
+
+async def assign_request_to_best_staff(request_doc: dict) -> Optional[dict]:
+    hotel_id = request_doc.get("hotelId") or request_doc.get("hotel_id")
+    candidates = await db.users.find(
+        {
+            "role": "staff",
+            "department": request_doc.get("departman"),
+            "active": {"$ne": False},
+            "$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}],
+        },
+        {"_id": 0},
+    ).to_list(500)
+    ranked: List[tuple[int, int, str, dict]] = []
+    for staff in candidates:
+        if not staff_request_scope_compatibility(staff, request_doc)[0]:
+            continue
+        shift_rank = await _staff_shift_rank(staff)
+        if shift_rank is None:
+            continue
+        workload = await db.requests.count_documents({
+            "assigned_staff_id": staff["id"],
+            "status": "PERSONEL_GIDIYOR",
+            "$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}],
+        })
+        ranked.append((shift_rank, workload, staff.get("name") or "", staff))
+    if not ranked:
+        return None
+    staff = min(ranked, key=lambda candidate: candidate[:3])[3]
+    timestamp = now_iso()
+    result = await db.requests.update_one(
+        {
+            "id": request_doc["id"],
+            "status": "ALINDI",
+            "$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}],
+        },
+        {"$set": {
+            "assigned_staff_id": staff["id"],
+            "assigned_staff_name": staff["name"],
+            "status": "PERSONEL_GIDIYOR",
+            "assigned_at": timestamp,
+            "assignment_source": "central_operations",
+            "updated_at": timestamp,
+        }},
+    )
+    if result.modified_count != 1:
+        return None
+    request_doc.update({
+        "assigned_staff_id": staff["id"],
+        "assigned_staff_name": staff["name"],
+        "status": "PERSONEL_GIDIYOR",
+        "assigned_at": timestamp,
+        "assignment_source": "central_operations",
+        "updated_at": timestamp,
+    })
+    return staff
+
+
+def is_explicit_guest_operation_request(message: str) -> bool:
+    normalized = normalize_assignment_text(message)
+    if any(phrase in normalized for phrase in (
+        "talebim ne oldu", "talebimin durumu", "tamamlandi mi", "durumu nedir",
+    )):
+        return False
+    action_markers = (
+        "istiyorum", "gonderebilir", "getirebilir", "doldurabilir", "temizle",
+        "calismiyor", "bozuk", "ariza", "eksik", "rica ediyorum",
+    )
+    return any(marker in normalized for marker in action_markers)
+
+
+async def guest_request_status_reply(user: dict, message: str) -> Optional[str]:
+    normalized = normalize_assignment_text(message)
+    if not any(phrase in normalized for phrase in (
+        "talebim ne oldu", "talebimin durumu", "talep durumu",
+        "tamamlandi mi", "durumu nedir", "ne durumda",
+    )):
+        return None
+    parsed = rule_based_extract(message)
+    query: Dict[str, Any] = {
+        "guest_id": user["id"],
+        "$or": [
+            {"hotel_id": user_hotel_id(user)},
+            {"hotelId": user_hotel_id(user)},
+        ],
+    }
+    if parsed.get("departman"):
+        query["departman"] = parsed["departman"]
+    task = await db.requests.find_one(
+        query, {"_id": 0}, sort=[("created_at", -1)]
+    )
+    if not task:
+        return "Bu konuyla ilgili size ait bir operasyon talebi bulamadım."
+    status_text = {
+        "ALINDI": "alındı ve uygun ekip bekleniyor",
+        "PERSONEL_GIDIYOR": "ilgili ekibe atandı ve işlemde",
+        "TAMAMLANDI": "tamamlandı",
+        "REDDEDILDI": "sonuçlandırılamadı",
+    }.get(task.get("status"), "işlemde")
+    return f"{task.get('hizmet_turu') or 'Talebiniz'} {status_text}."
+
+
 async def create_guest_request_from_pending(pending: dict, u: dict, fallback_message: str, services: Dict[str, bool]) -> tuple[str, Dict[str, Any]]:
     departman = pending.get("departman")
     if departman not in DEPARTMENTS:
@@ -2768,11 +3061,17 @@ async def create_guest_request_from_pending(pending: dict, u: dict, fallback_mes
     oda = str(pending.get("oda_no") or u.get("room_no") or "").strip()
     if not oda:
         raise HTTPException(400, "Talep oluşturmak için oda numarası gerekli")
+    room = await validate_guest_request_room(u, oda)
     req = {
         "id": str(uuid.uuid4()),
         "guest_id": u["id"],
         "guest_name": u["name"],
         "room_no": oda,
+        "room_area": " ".join(filter(None, (
+            str(room.get("floor") or "").strip(),
+            str(room.get("room_name") or "").strip(),
+            str(room.get("description") or "").strip(),
+        ))),
         "hotel_id": user_hotel_id(u),
         "hotelId": user_hotel_id(u),
         "departman": departman,
@@ -2782,6 +3081,8 @@ async def create_guest_request_from_pending(pending: dict, u: dict, fallback_mes
         "detay": pending.get("detay") or fallback_message,
         "oncelik": (pending.get("oncelik") or "ORTA").upper(),
         "status": "ALINDI",
+        "source": "guest_ai",
+        "guest_visible": True,
         "assigned_staff_id": None,
         "assigned_staff_name": None,
         "created_at": now_iso(),
@@ -2790,6 +3091,7 @@ async def create_guest_request_from_pending(pending: dict, u: dict, fallback_mes
     if req["oncelik"] not in ("DUSUK", "ORTA", "YUKSEK"):
         req["oncelik"] = "ORTA"
     await db.requests.insert_one(req.copy())
+    await assign_request_to_best_staff(req)
     parsed = {
         "departman": req["departman"], "oda_no": req["room_no"],
         "hizmet_turu": req["hizmet_turu"], "zaman": req["zaman"],
@@ -2857,7 +3159,43 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
             parsed=None,
         )
 
-    if pending_request and role_of(u) == "guest":
+    status_reply = await guest_request_status_reply(u, body.message)
+    if status_reply:
+        reply = adapt_reception_tone(body.message, status_reply, history)
+        await db.chat_messages.insert_one({
+            "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+            "role": "assistant", "content": reply, "created_at": now_iso(),
+        })
+        return ChatOut(
+            session_id=session_id, reply=reply, ready=False,
+            request_id=None, parsed=None,
+        )
+
+    if is_explicit_guest_operation_request(body.message):
+        parsed = rule_based_extract(body.message)
+        if parsed.get("departman") in DEPARTMENTS:
+            parsed["oda_no"] = parsed.get("oda_no") or u.get("room_no")
+            parsed["zaman"] = parsed.get("zaman") or "Şimdi"
+            service_key = DEPARTMENT_SERVICE_MAP.get(parsed["departman"])
+            parsed["service_key"] = service_key
+            request_id, parsed_clean = await create_guest_request_from_pending(
+                parsed, u, body.message, services
+            )
+            reply = adapt_reception_tone(
+                body.message,
+                "Talebiniz güvenli şekilde doğrulandı ve otel operasyon sistemine iletildi.",
+                history,
+            )
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+                "role": "assistant", "content": reply, "created_at": now_iso(),
+            })
+            return ChatOut(
+                session_id=session_id, reply=reply, ready=True,
+                request_id=request_id, parsed=parsed_clean,
+            )
+
+    if pending_request:
         if is_confirmation(body.message):
             request_id, parsed_clean = await create_guest_request_from_pending(pending_request, u, body.message, services)
             reply = adapt_reception_tone(
@@ -2992,7 +3330,9 @@ async def voice_transcribe(file: UploadFile = File(...), u: dict = Depends(get_c
 async def my_requests(u: dict = Depends(get_current_user)):
     if role_of(u) != "guest":
         raise HTTPException(403, "Sadece misafirler")
-    docs = await db.requests.find({"guest_id": u["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    docs = await db.requests.find(
+        with_hotel_scope(u, {"guest_id": u["id"]}), {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
     return [public_request(d) for d in docs]
 
 @api.get("/requests/department", response_model=List[RequestOut])
@@ -3033,12 +3373,13 @@ async def _update_status(req_id: str, new_status: str, staff: Optional[dict]):
     if new_status == "PERSONEL_GIDIYOR" and staff:
         update["assigned_staff_id"] = staff["id"]
         update["assigned_staff_name"] = staff["name"]
+    query = with_hotel_scope(staff, {"id": req_id}) if staff else {"id": req_id}
     r = await db.requests.find_one_and_update(
-        {"id": req_id}, {"$set": update}, return_document=True
+        query, {"$set": update}, return_document=True
     )
     if not r:
         raise HTTPException(404, "Talep bulunamadı")
-    r = await db.requests.find_one({"id": req_id}, {"_id": 0})
+    r = await db.requests.find_one(query, {"_id": 0})
     return r
 
 @api.post("/requests/{req_id}/accept", response_model=RequestOut)
@@ -3107,24 +3448,38 @@ async def complete_request(req_id: str, body: CompleteIn, u: dict = Depends(get_
         proof = f"data:image/jpeg;base64,{proof}"
     if len(proof) > 8 * 1024 * 1024:
         raise HTTPException(400, "Fotoğraf çok büyük (maks 8MB)")
+    timestamp = now_iso()
     update = {
         "status": "TAMAMLANDI",
-        "updated_at": now_iso(),
-        "completed_at": now_iso(),
+        "updated_at": timestamp,
+        "completed_at": timestamp,
         "proof_photo": proof,
+        "completed_via": "proof_photo",
     }
-    await db.requests.update_one({"id": req_id}, {"$set": update})
-    r = await db.requests.find_one({"id": req_id}, {"_id": 0})
+    await db.requests.update_one(
+        with_hotel_scope(u, {
+            "id": req_id,
+            "assigned_staff_id": u["id"],
+            "status": "PERSONEL_GIDIYOR",
+        }),
+        {"$set": update},
+    )
+    if r.get("departman") == "housekeeping":
+        await db.rooms.update_one(
+            with_hotel_scope(u, {"room_number": r["room_no"]}),
+            {"$set": {"operational_status": "normal", "updated_at": timestamp}},
+        )
+    r = await db.requests.find_one(with_hotel_scope(u, {"id": req_id}), {"_id": 0})
     return public_request(r)
 
 # --------------------------------------------------------------------------
 # Admin
 # --------------------------------------------------------------------------
-@api.get("/admin/requests", response_model=List[RequestOut])
+@api.get("/admin/requests", response_model=List[ManagerRequestOut])
 async def admin_all(u: dict = Depends(get_current_user)):
     require_roles(u, "system_admin", "hotel_manager")
     docs = await db.requests.find(with_hotel_scope(u), {"_id": 0}).sort("created_at", -1).to_list(500)
-    return [public_request(d) for d in docs]
+    return [public_request(d, include_internal=True) for d in docs]
 
 @api.get("/admin/stats")
 async def admin_stats(u: dict = Depends(get_current_user)):

@@ -38,6 +38,9 @@ export default function AdminAll() {
             <Text style={s.meta}>{DEPT_LABEL[item.departman]} · Oda {item.room_no} · {item.zaman}</Text>
             <Text style={s.guest}>Misafir: {item.guest_name}</Text>
             {item.assigned_staff_name && <Text style={s.staff}>Görevli: {item.assigned_staff_name}</Text>}
+            {item.operational_note && (
+              <Text style={s.note}>Operasyon notu: {item.operational_note}</Text>
+            )}
 
             {item.proof_photo ? (
               <Pressable
@@ -104,6 +107,7 @@ const s = StyleSheet.create({
   meta: { color: COLORS.onSurfaceTertiary, fontSize: 12 },
   guest: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
   staff: { color: COLORS.brand, fontSize: 12, fontStyle: "italic" },
+  note: { color: COLORS.warning, fontSize: 12, marginTop: SPACING.xs },
   proofRow: { flexDirection: "row", alignItems: "center", gap: SPACING.md, marginTop: SPACING.sm, padding: SPACING.sm, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.brand },
   thumb: { width: 56, height: 56, borderRadius: RADIUS.sm, backgroundColor: COLORS.surfaceTertiary },
   proofLabel: { color: COLORS.brand, fontSize: 13, fontWeight: "700" },

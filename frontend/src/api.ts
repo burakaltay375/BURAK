@@ -174,6 +174,8 @@ export type RequestItem = {
   assigned_staff_id?: string | null; assigned_staff_name?: string | null;
   proof_photo?: string | null;
   completed_at?: string | null;
+  operational_note?: string | null;
+  completed_via?: "staff_ai" | "proof_photo" | null;
   created_at: string; updated_at: string;
 };
 
