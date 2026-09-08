@@ -2049,7 +2049,7 @@ DEPT_KEYWORDS = {
         # Temizlik / textile
         "havlu", "çarşaf", "carsaf", "temizlik", "yatak", "tuvalet kağıdı", "sabun",
         "şampuan", "sampuan", "oda temizliği", "diş fırçası", "terlik",
-        "mini bar", "minibar", "yastık", "yastik",
+        "temizle", "temizlen", "mini bar", "minibar", "yastık", "yastik",
     ],
     "vale": ["vale", "araba", "araç", "park", "otopark", "anahtar"],
 }
