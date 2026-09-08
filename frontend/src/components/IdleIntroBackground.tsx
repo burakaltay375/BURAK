@@ -57,6 +57,7 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     setShowIntro(true);
     player.currentTime = 0;
     player.muted = true;
+    player.loop = false;
     player.play();
   }, [introUrl, isHome, player]);
 
@@ -107,6 +108,19 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
     });
     return () => subscription.remove();
   }, [clearIdleTimer, hideIntro, player]);
+
+  useEffect(() => {
+    if (!showIntro) return;
+    // expo-video's playToEnd event is not reliable in every web browser.
+    // The backend already records the validated media duration, so use it
+    // as a bounded fallback without changing the existing API.
+    const durationSeconds = Math.min(
+      Math.max(hotel?.intro_video_duration ?? 300, 1),
+      300,
+    );
+    const fallback = setTimeout(hideIntro, (durationSeconds + 0.75) * 1_000);
+    return () => clearTimeout(fallback);
+  }, [hideIntro, hotel?.intro_video_duration, showIntro]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
