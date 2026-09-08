@@ -607,7 +607,11 @@ function Navbar() {
             <Globe2 className="h-4 w-4" />
             <span className="flex items-center gap-1">Kurumsal web sitesi <ChevronDown className="h-3 w-3" /></span>
           </div>
-          <a href={company.phoneHref} className="font-medium hover:text-red-600">Ara / İletişim</a>
+          <div className="flex items-center gap-4">
+            <a href="/operasyon" className="font-medium hover:text-red-600">Operasyon merkezi</a>
+            <a href="/admin" className="font-medium hover:text-red-600">Admin</a>
+            <a href={company.phoneHref} className="font-medium hover:text-red-600">Ara / İletişim</a>
+          </div>
         </div>
       </div>
 
@@ -620,6 +624,12 @@ function Navbar() {
               {item}
             </a>
           ))}
+          <a href="/operasyon" className="text-sm font-semibold text-red-600 transition hover:text-red-700">
+            Operasyon
+          </a>
+          <a href="/admin" className="text-sm font-semibold text-zinc-900 transition hover:text-red-600">
+            Admin
+          </a>
         </div>
 
         <button
@@ -644,6 +654,12 @@ function Navbar() {
                 {item}
               </a>
             ))}
+            <a href="/operasyon" onClick={() => setOpen(false)} className="border-b border-zinc-100 px-2 py-3 font-semibold text-red-600">
+              Operasyon merkezi
+            </a>
+            <a href="/admin" onClick={() => setOpen(false)} className="px-2 py-3 font-semibold text-zinc-900">
+              Admin paneli
+            </a>
           </div>
         </div>
       )}
@@ -696,9 +712,14 @@ function Hero() {
               Panter, işletmelerin insanlarını, varlıklarını ve operasyonlarını profesyonel ekiplerle korur.
             </p>
             <p className="mt-4 text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">{slide.label}</p>
-            <a href="#services" className="mt-8 inline-flex items-center gap-3 bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700">
-              Hizmetleri keşfet <ArrowRight className="h-5 w-5" />
-            </a>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <a href="#services" className="inline-flex items-center gap-3 bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700">
+                Hizmetleri keşfet <ArrowRight className="h-5 w-5" />
+              </a>
+              <a href="/operasyon" className="inline-flex items-center gap-3 border border-white/40 px-6 py-3 font-semibold text-white transition hover:bg-white/10">
+                Operasyon merkezini aç
+              </a>
+            </div>
           </motion.div>
           <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-4 bg-black py-4" onClick={(event) => event.stopPropagation()}>
             <button

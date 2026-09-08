@@ -2,9 +2,9 @@
 
 Otel ve güvenlik operasyonları için tam yığın uygulama:
 
+- **Kurumsal site + Admin** — Next.js (`security-website/`) → `/` ve `/admin`
+- **Operasyon merkezi** — Expo web (`frontend/`) → `/operasyon`
 - **Backend** — FastAPI + MongoDB (`backend/`)
-- **Pazarlama + Admin** — Next.js (`security-website/`)
-- **Mobil** — Expo / React Native (`frontend/`, isteğe bağlı)
 
 Kaynak: [burakaltay375/PANTER](https://github.com/burakaltay375/PANTER) (public). `BURAK` deposu özel olduğu için bu public kopya kullanıldı.
 
@@ -39,15 +39,27 @@ npm install
 npx next dev --hostname 0.0.0.0 --port 14321
 ```
 
+Operasyon web arayüzünü (Expo) siteye gömmek için:
+
+```bash
+bash scripts/build-ops-web.sh
+```
+
 Hazır script: `bash scripts/dev.sh`
 
 | Servis | Adres |
 |--------|--------|
-| Site | http://127.0.0.1:14321 |
-| Admin | http://127.0.0.1:14321/admin |
+| Güvenlik sitesi | http://127.0.0.1:14321 |
+| Admin paneli | http://127.0.0.1:14321/admin |
+| Operasyon merkezi | http://127.0.0.1:14321/operasyon |
 | API | http://127.0.0.1:18080/api |
 
-Admin girişi, `backend/.env` içindeki `SYSTEM_ADMIN_EMAIL` / `SYSTEM_ADMIN_PASSWORD` değerleridir.
+Yerel girişler:
+
+- Admin: `admin@panter.local` / `PanterAdmin123!`
+- Otel müdürü: `manager@hotel.com` / `manager123`
+- Misafir: `misafir@hotel.com` / `misafir123`
+- Personel: `odaservisi@hotel.com` / `personel123`
 
 `security-website` tarayıcıdaki `/api` isteklerini FastAPI’ye yönlendirir (`PANTER_BACKEND_ORIGIN`).
 

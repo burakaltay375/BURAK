@@ -3,7 +3,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { storage } from "./utils/storage";
 
-const BASE = (process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const envBackend = (process.env.EXPO_PUBLIC_BACKEND_URL ?? "").trim();
+const BASE = (
+  envBackend ||
+  (Platform.OS === "web" ? "" : "http://localhost:8000")
+).replace(/\/$/, "");
 const API = `${BASE}/api`;
 
 const TOKEN_KEY = "hotel_ops_token";

@@ -6,12 +6,24 @@ const backendOrigin =
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backendOrigin}/api/:path*`,
-      },
-    ];
+    return {
+      beforeFiles: [
+        {
+          source: "/api/:path*",
+          destination: `${backendOrigin}/api/:path*`,
+        },
+      ],
+      fallback: [
+        {
+          source: "/operasyon",
+          destination: "/operasyon/index.html",
+        },
+        {
+          source: "/operasyon/:path*",
+          destination: "/operasyon/index.html",
+        },
+      ],
+    };
   },
 };
 

@@ -54,7 +54,8 @@
       "package": "com.emergent.hotelopshub.vstlq8"
     },
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "baseUrl": "/operasyon"
     }
   }
 }

@@ -42,7 +42,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "Panter API:  http://127.0.0.1:${BACKEND_PORT}/api"
-echo "Panter site: http://127.0.0.1:${WEB_PORT}"
-echo "Admin:       http://127.0.0.1:${WEB_PORT}/admin"
+echo "Panter API:         http://127.0.0.1:${BACKEND_PORT}/api"
+echo "Güvenlik sitesi:    http://127.0.0.1:${WEB_PORT}"
+echo "Admin:              http://127.0.0.1:${WEB_PORT}/admin"
+echo "Operasyon merkezi:  http://127.0.0.1:${WEB_PORT}/operasyon"
 wait
