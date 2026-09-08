@@ -60,15 +60,15 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
     player.pause();
     player.currentTime = 0;
     player.replace(introSource);
-    resetIdleTimer();
-    return clearIdleTimer;
-  }, [clearIdleTimer, introSource, player, resetIdleTimer]);
+  }, [introSource, player]);
 
   useEffect(() => {
     setIsIdle(false);
     setGlobalIntroFailed(false);
     lastPointerRef.current = null;
-  }, [hotel?.id, hotelIntroUrl]);
+    resetIdleTimer();
+    return clearIdleTimer;
+  }, [clearIdleTimer, hotel?.id, hotelIntroUrl, resetIdleTimer]);
 
   useEffect(() => {
     const subscription = player.addListener("statusChange", ({ status }) => {
