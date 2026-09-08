@@ -2,14 +2,17 @@ import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { RoleGate } from "@/src/role-guard";
 import { HospiraMark } from "@/src/components/HospiraBrand";
+import IdleIntroBackground from "@/src/components/IdleIntroBackground";
 import { COLORS } from "@/src/theme";
 
 export default function GuestLayout() {
   return (
     <RoleGate role="guest">
+      <IdleIntroBackground homePath="/chat">
       <Tabs
         screenOptions={{
           headerShown: false,
+          sceneStyle: { backgroundColor: "transparent" },
           tabBarActiveTintColor: COLORS.brand,
           tabBarInactiveTintColor: COLORS.onSurfaceTertiary,
           tabBarStyle: {
@@ -70,6 +73,7 @@ export default function GuestLayout() {
           }}
         />
       </Tabs>
+      </IdleIntroBackground>
     </RoleGate>
   );
 }

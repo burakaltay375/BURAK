@@ -60,10 +60,7 @@ export default function Login() {
       submittingRef.current = true;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const u = await signIn(email.trim(), password, selectedHotelId);
-      router.replace({
-        pathname: "/hotel-branding",
-        params: { hotelId: selectedHotelId, next: String(dashboardRouteForRole(u.role)) },
-      });
+      router.replace(dashboardRouteForRole(u.role));
     } catch (e: any) {
       submittingRef.current = false;
       setErr(e.message);

@@ -93,7 +93,7 @@ function Row({ label, value }: { label: string; value: number }) {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.surface },
+  root: { flex: 1, backgroundColor: "transparent" },
   content: { padding: SPACING.lg, gap: SPACING.md, paddingBottom: SPACING.xl2 },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   sub: { fontSize: 13, color: COLORS.onSurfaceTertiary, marginBottom: SPACING.md },
