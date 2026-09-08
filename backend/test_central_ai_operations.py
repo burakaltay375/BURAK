@@ -89,10 +89,11 @@ class CentralAiOperationsTest(unittest.TestCase):
             ],
             cwd=os.path.dirname(__file__),
             env=os.environ.copy(),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-        for _ in range(60):
+        for _ in range(200):
             try:
                 urllib.request.urlopen(f"{cls.base_url}/api/hotels/active", timeout=1).read()
                 break
@@ -100,7 +101,8 @@ class CentralAiOperationsTest(unittest.TestCase):
                 time.sleep(0.1)
         else:
             cls.server_process.terminate()
-            raise RuntimeError("Test Uvicorn server could not start")
+            output, _ = cls.server_process.communicate(timeout=10)
+            raise RuntimeError(f"Test Uvicorn server could not start:\n{output}")
 
     @classmethod
     def tearDownClass(cls) -> None:
