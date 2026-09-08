@@ -178,6 +178,28 @@ export default function SystemHotels() {
     ]);
   };
 
+  const uploadEditingBranding = async (type: "logo" | "intro", asset: UploadAsset | null) => {
+    if (!editing || !asset) {
+      if (type === "logo") setEditLogo(asset);
+      else setEditIntro(asset);
+      return;
+    }
+    if (type === "logo") setEditLogo(asset);
+    else setEditIntro(asset);
+    setErr(null);
+    setBusy(editing.id);
+    try {
+      await api.updateHotelBranding(editing.id, type, asset);
+      if (type === "logo") setEditLogo(null);
+      else setEditIntro(null);
+      await load();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const saveEdit = async () => {
     if (!editing) return;
     setErr(null);
@@ -321,8 +343,8 @@ export default function SystemHotels() {
                     existingLogoUrl={item.logo_url}
                     existingIntroUrl={item.intro_video_url}
                     disabled={busy === item.id}
-                    onLogoChange={setEditLogo}
-                    onIntroChange={setEditIntro}
+                    onLogoChange={(asset) => uploadEditingBranding("logo", asset)}
+                    onIntroChange={(asset) => uploadEditingBranding("intro", asset)}
                     onDeleteExistingLogo={async () => { await api.deleteHotelBranding(item.id, "logo"); await load(); }}
                     onDeleteExistingIntro={async () => { await api.deleteHotelBranding(item.id, "intro"); await load(); }}
                     onError={setErr}
