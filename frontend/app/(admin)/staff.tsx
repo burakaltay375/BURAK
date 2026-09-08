@@ -8,16 +8,12 @@ import { api, type User } from "@/src/api";
 import { COLORS, DEPT_LABEL, RADIUS, SPACING, TYPE } from "@/src/theme";
 
 const DEPARTMENTS = Object.entries(DEPT_LABEL);
-
-function staffIdentityLabel(status?: string | null) {
-  if (status === "verified_by_hotel" || status === "approved" || status === "active_employee") return "Verified";
-  if (status === "rejected") return "Rejected";
-  if (status === "suspicious") return "Suspicious";
-  if (status === "needs_new_documents") return "New Documents Required";
-  if (status === "pending_review" || status === "in_review") return "Pending Manager Review";
-  if (status) return "Pending Verification";
-  return "Not Started";
-}
+const isManagerPosition = (position?: string | null) => {
+  const value = (position ?? "").toLocaleLowerCase("tr-TR");
+  return value.includes("manager") || value.includes("supervisor") || value.includes("müdür") || value.includes("mudur");
+};
+const departmentPosition = (department: string, manager: boolean) =>
+  `${DEPT_LABEL[department] ?? department} ${manager ? "Müdürü" : "Personel"}`;
 
 export default function AdminStaff() {
   const [staff, setStaff] = useState<User[] | null>(null);
@@ -26,12 +22,7 @@ export default function AdminStaff() {
     email: "",
     password: "",
     department: DEPARTMENTS[0]?.[0] ?? "",
-    gender: "",
-    birth_date: "",
-    nationality: "",
-    country: "",
-    region_city: "",
-    startIdentity: true,
+    position: departmentPosition(DEPARTMENTS[0]?.[0] ?? "", false),
   });
   const [editing, setEditing] = useState<User | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,18 +53,10 @@ export default function AdminStaff() {
         email: form.email.trim(),
         password: form.password,
         department: form.department,
-        gender: form.gender.trim(),
-        birth_date: form.birth_date.trim(),
-        nationality: form.nationality.trim(),
-        country: form.country.trim(),
-        region_city: form.region_city.trim(),
-        start_identity_verification: form.startIdentity,
+        position: form.position.trim(),
       });
-      setNotice(form.startIdentity
-        ? `${created.name} için kimlik doğrulaması başlatıldı. Çalışan onaylanana kadar pasif kalacak.`
-        : `${created.name} aktif çalışan olarak oluşturuldu.`
-      );
-      setForm((f) => ({ ...f, name: "", email: "", password: "", gender: "", birth_date: "", nationality: "", country: "", region_city: "", startIdentity: true }));
+      setNotice(`${created.name} çalışan olarak oluşturuldu.`);
+      setForm((f) => ({ ...f, name: "", email: "", password: "", position: departmentPosition(f.department, false) }));
       await load();
     } catch (e: any) {
       setErr(e.message);
@@ -91,11 +74,7 @@ export default function AdminStaff() {
       await api.updateStaff(editing.id, {
         name: editing.name.trim(),
         department: editing.department ?? "",
-        gender: editing.gender?.trim() ?? "",
-        birth_date: editing.birth_date?.trim() ?? "",
-        nationality: editing.nationality?.trim() ?? "",
-        country: editing.country?.trim() ?? "",
-        region_city: editing.region_city?.trim() ?? "",
+        position: editing.position?.trim() ?? "",
       });
       setEditing(null);
       await load();
@@ -186,66 +165,30 @@ export default function AdminStaff() {
                 onChangeText={(password) => setForm((f) => ({ ...f, password }))}
                 style={s.input}
               />
-              <TextInput
-                testID="staff-gender-input"
-                placeholder="Cinsiyet"
-                placeholderTextColor={COLORS.onSurfaceTertiary}
-                value={form.gender}
-                onChangeText={(gender) => setForm((f) => ({ ...f, gender }))}
-                style={s.input}
-              />
-              <TextInput
-                testID="staff-birth-date-input"
-                placeholder="Doğum tarihi (YYYY-MM-DD)"
-                placeholderTextColor={COLORS.onSurfaceTertiary}
-                value={form.birth_date}
-                onChangeText={(birth_date) => setForm((f) => ({ ...f, birth_date }))}
-                style={s.input}
-              />
-              <TextInput
-                testID="staff-nationality-input"
-                placeholder="Uyruk"
-                placeholderTextColor={COLORS.onSurfaceTertiary}
-                value={form.nationality}
-                onChangeText={(nationality) => setForm((f) => ({ ...f, nationality }))}
-                style={s.input}
-              />
-              <TextInput
-                testID="staff-country-input"
-                placeholder="Ülke"
-                placeholderTextColor={COLORS.onSurfaceTertiary}
-                value={form.country}
-                onChangeText={(country) => setForm((f) => ({ ...f, country }))}
-                style={s.input}
-              />
-              <TextInput
-                testID="staff-region-city-input"
-                placeholder="Bölge / Şehir"
-                placeholderTextColor={COLORS.onSurfaceTertiary}
-                value={form.region_city}
-                onChangeText={(region_city) => setForm((f) => ({ ...f, region_city }))}
-                style={s.input}
-              />
+              <Text style={s.label}>Planlama yetkisi</Text>
+              <View style={s.chips}>
+                {[false, true].map((manager) => {
+                  const selected = isManagerPosition(form.position) === manager;
+                  return (
+                    <Pressable key={String(manager)} onPress={() => setForm((f) => ({ ...f, position: departmentPosition(f.department, manager) }))} style={[s.chip, selected && s.chipActive]}>
+                      <Text style={[s.chipText, selected && s.chipTextActive]}>{manager ? "Departman Müdürü" : "Personel"}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
               <Text style={s.label}>Departman</Text>
               <View style={s.chips}>
                 {DEPARTMENTS.map(([code, label]) => (
                   <Pressable
                     key={code}
                     testID={`staff-department-${code}`}
-                    onPress={() => setForm((f) => ({ ...f, department: code }))}
+                    onPress={() => setForm((f) => ({ ...f, department: code, position: departmentPosition(code, isManagerPosition(f.position)) }))}
                     style={[s.chip, form.department === code && s.chipActive]}
                   >
                     <Text style={[s.chipText, form.department === code && s.chipTextActive]}>{label}</Text>
                   </Pressable>
                 ))}
               </View>
-              <Pressable onPress={() => setForm((f) => ({ ...f, startIdentity: !f.startIdentity }))} style={s.identityToggle} testID="staff-identity-toggle">
-                <Ionicons name={form.startIdentity ? "checkbox" : "square-outline"} size={22} color={form.startIdentity ? COLORS.brand : COLORS.onSurfaceTertiary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={s.identityTitle}>Kimlik doğrulamasını başlat</Text>
-                  <Text style={s.identitySub}>Çalışan oluşturulunca kimlik doğrulama kaydı açılır ve çalışan kendi belgelerini yükleyebilir.</Text>
-                </View>
-              </Pressable>
               <Pressable
                 testID="create-staff-button"
                 disabled={busy === "create"}
@@ -268,15 +211,21 @@ export default function AdminStaff() {
               {isEditing && editing ? (
                 <>
                   <TextInput value={editing.name} onChangeText={(name) => setEditing((e) => e && { ...e, name })} style={s.input} placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <TextInput value={editing.gender ?? ""} onChangeText={(gender) => setEditing((e) => e && { ...e, gender })} style={s.input} placeholder="Cinsiyet" placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <TextInput value={editing.birth_date ?? ""} onChangeText={(birth_date) => setEditing((e) => e && { ...e, birth_date })} style={s.input} placeholder="Doğum tarihi (YYYY-MM-DD)" placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <TextInput value={editing.nationality ?? ""} onChangeText={(nationality) => setEditing((e) => e && { ...e, nationality })} style={s.input} placeholder="Uyruk" placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <TextInput value={editing.country ?? ""} onChangeText={(country) => setEditing((e) => e && { ...e, country })} style={s.input} placeholder="Ülke" placeholderTextColor={COLORS.onSurfaceTertiary} />
-                  <TextInput value={editing.region_city ?? ""} onChangeText={(region_city) => setEditing((e) => e && { ...e, region_city })} style={s.input} placeholder="Bölge / Şehir" placeholderTextColor={COLORS.onSurfaceTertiary} />
+                  <Text style={s.label}>Planlama yetkisi</Text>
+                  <View style={s.chips}>
+                    {[false, true].map((manager) => {
+                      const selected = isManagerPosition(editing.position) === manager;
+                      return (
+                        <Pressable key={String(manager)} onPress={() => setEditing((e) => e && { ...e, position: departmentPosition(e.department ?? "", manager) })} style={[s.chip, selected && s.chipActive]}>
+                          <Text style={[s.chipText, selected && s.chipTextActive]}>{manager ? "Departman Müdürü" : "Personel"}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                   <Text style={s.label}>Departman</Text>
                   <View style={s.chips}>
                     {DEPARTMENTS.map(([code, label]) => (
-                      <Pressable key={code} onPress={() => setEditing((e) => e && { ...e, department: code })} style={[s.chip, editing.department === code && s.chipActive]}>
+                      <Pressable key={code} onPress={() => setEditing((e) => e && { ...e, department: code, position: departmentPosition(code, isManagerPosition(e.position)) })} style={[s.chip, editing.department === code && s.chipActive]}>
                         <Text style={[s.chipText, editing.department === code && s.chipTextActive]}>{label}</Text>
                       </Pressable>
                     ))}
@@ -293,17 +242,11 @@ export default function AdminStaff() {
                       <Text style={s.name}>{item.name}</Text>
                       <Text style={s.meta}>{item.email}</Text>
                       <Text style={s.meta}>{DEPT_LABEL[item.department ?? ""] ?? item.department}</Text>
+                      <Text style={s.meta}>{item.position || "Pozisyon belirtilmemiş"}</Text>
                     </View>
                     <Text style={[s.badge, item.active === false ? s.inactive : s.active]}>
                       {item.active === false ? "Pasif" : "Aktif"}
                     </Text>
-                  </View>
-                  <View style={s.details}>
-                    <Text style={s.detail}>Cinsiyet: {item.gender || "—"}</Text>
-                    <Text style={s.detail}>Doğum: {item.birth_date || "—"} · Yaş: {item.age ?? "—"}</Text>
-                    <Text style={s.detail}>Uyruk: {item.nationality || "—"}</Text>
-                    <Text style={s.detail}>Konum: {[item.country, item.region_city].filter(Boolean).join(" / ") || "—"}</Text>
-                    <Text style={s.detail}>Kimlik: {staffIdentityLabel(item.identity_status)}</Text>
                   </View>
                   <View style={s.actions}>
                     <Pressable onPress={() => setEditing(item)} disabled={busy === item.id} style={s.actionBtn}>
@@ -345,9 +288,6 @@ const s = StyleSheet.create({
   chipActive: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
   chipText: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
   chipTextActive: { color: COLORS.onBrandPrimary, fontWeight: "700" },
-  identityToggle: { flexDirection: "row", alignItems: "flex-start", gap: SPACING.sm, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, padding: SPACING.md },
-  identityTitle: { color: COLORS.onSurface, fontWeight: "800" },
-  identitySub: { color: COLORS.onSurfaceTertiary, fontSize: 12, lineHeight: 18, marginTop: 2 },
   primaryBtn: { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingVertical: SPACING.md, alignItems: "center" },
   primaryText: { color: COLORS.onBrandPrimary, fontWeight: "700" },
   disabled: { opacity: 0.65 },
@@ -357,8 +297,6 @@ const s = StyleSheet.create({
   cardTop: { flexDirection: "row", alignItems: "center", gap: SPACING.md },
   name: { color: COLORS.onSurface, fontSize: 16, fontWeight: "700", fontFamily: TYPE.display },
   meta: { color: COLORS.onSurfaceTertiary, fontSize: 12, marginTop: 4 },
-  details: { gap: 4 },
-  detail: { color: COLORS.onSurfaceSecondary, fontSize: 12 },
   badge: { overflow: "hidden", borderRadius: RADIUS.pill, paddingHorizontal: SPACING.sm, paddingVertical: 4, fontSize: 11, fontWeight: "700" },
   active: { backgroundColor: COLORS.success, color: COLORS.surface },
   inactive: { backgroundColor: COLORS.surfaceTertiary, color: COLORS.onSurfaceSecondary },

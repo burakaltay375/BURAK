@@ -1,11 +1,12 @@
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { api, type Hotel, type HotelServices } from "@/src/api";
+import { api, type Hotel, type HotelServices, type UploadAsset } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import HotelBrandingFields from "@/src/components/HotelBrandingFields";
 import { COLORS, RADIUS, SERVICE_LABELS, SPACING, TYPE } from "@/src/theme";
 
 const SERVICE_ENTRIES = Object.entries(SERVICE_LABELS);
@@ -14,6 +15,8 @@ export default function AdminProfile() {
   const { user, signOut } = useAuth();
   const router = useRouter();
   const [hotel, setHotel] = useState<Hotel | null>(null);
+  const [logo, setLogo] = useState<UploadAsset | null>(null);
+  const [intro, setIntro] = useState<UploadAsset | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -52,6 +55,38 @@ export default function AdminProfile() {
     router.replace("/login");
   };
 
+  const uploadBranding = async (type: "logo" | "intro", asset: UploadAsset) => {
+    setBusy(`branding-${type}`);
+    setErr(null);
+    try {
+      const updated = await api.updateManagerBranding(type, asset);
+      setHotel(updated);
+      if (type === "logo") setLogo(null);
+      else setIntro(null);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteBranding = async (type: "logo" | "intro") => {
+    const updated = await api.deleteManagerBranding(type);
+    setHotel(updated);
+  };
+
+  const saveReservationSettings = async () => {
+    if (!hotel) return;
+    setBusy("reservation-settings");
+    setErr(null);
+    try {
+      setHotel(await api.updateManagerHotel({
+        reservation_url: hotel.reservation_url || null,
+      }));
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(null); }
+  };
+
   if (!user) return null;
 
   return (
@@ -63,6 +98,29 @@ export default function AdminProfile() {
           <Text style={s.name}>{user.name}</Text>
           <Text style={s.email}>{user.email}</Text>
         </View>
+
+        {hotel && (
+          <View style={s.section}>
+            <HotelBrandingFields
+              logo={logo}
+              intro={intro}
+              existingLogoUrl={hotel.logo_url}
+              existingIntroUrl={hotel.intro_video_url}
+              disabled={busy?.startsWith("branding") === true}
+              onLogoChange={(asset) => {
+                setLogo(asset);
+                if (asset) uploadBranding("logo", asset);
+              }}
+              onIntroChange={(asset) => {
+                setIntro(asset);
+                if (asset) uploadBranding("intro", asset);
+              }}
+              onDeleteExistingLogo={() => deleteBranding("logo")}
+              onDeleteExistingIntro={() => deleteBranding("intro")}
+              onError={setErr}
+            />
+          </View>
+        )}
 
         <View style={s.section}>
           <Text style={s.sectionTitle}>Otel Servisleri</Text>
@@ -91,6 +149,19 @@ export default function AdminProfile() {
           )}
         </View>
 
+        {hotel && (
+          <View style={s.section}>
+            <Text style={s.sectionTitle}>Resmi Rezervasyon Bağlantısı</Text>
+            <Text style={s.sub}>Misafirler “Rezervasyonu Tamamla” dediğinde bu HTTPS adresine yönlendirilir.</Text>
+            <TextInput style={s.input} value={hotel.reservation_url ?? ""} placeholder="https://oteliniz.com/rezervasyon"
+              placeholderTextColor={COLORS.onSurfaceTertiary} autoCapitalize="none"
+              onChangeText={(reservation_url) => setHotel({ ...hotel, reservation_url })} />
+            <Pressable style={s.save} onPress={saveReservationSettings} disabled={busy === "reservation-settings"}>
+              <Text style={s.saveText}>{busy === "reservation-settings" ? "Kaydediliyor…" : "Ayarları Kaydet"}</Text>
+            </Pressable>
+          </View>
+        )}
+
         <Pressable testID="logout-button" onPress={logout} style={s.logout}>
           <Ionicons name="log-out" size={20} color={COLORS.error} />
           <Text style={s.logoutText}>Çıkış Yap</Text>
@@ -113,6 +184,9 @@ const s = StyleSheet.create({
   sub: { color: COLORS.onSurfaceTertiary, fontSize: 12 },
   err: { color: COLORS.error, fontSize: 13 },
   services: { gap: SPACING.sm },
+  input: { backgroundColor: COLORS.surface, color: COLORS.onSurface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md },
+  save: { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, padding: SPACING.md, alignItems: "center" },
+  saveText: { color: COLORS.onBrandPrimary, fontWeight: "800" },
   serviceRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md },
   serviceRowActive: { borderColor: COLORS.brand },
   serviceText: { color: COLORS.onSurfaceSecondary, fontSize: 14, fontWeight: "600" },

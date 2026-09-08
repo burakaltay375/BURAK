@@ -1,66 +1,148 @@
 # Panter (BURAK)
 
-Otel ve güvenlik operasyonları için tam yığın uygulama:
+Full-stack security operations platform:
 
-- **Kurumsal site + Admin** — Next.js (`security-website/`) → `/` ve `/admin`
-- **Operasyon merkezi** — Expo web (`frontend/`) → `/operasyon`
 - **Backend** — FastAPI + MongoDB (`backend/`)
+- **Marketing + Admin** — Next.js (`security-website/`)
+- **Mobile** — Expo / React Native (`frontend/`)
 
-Kaynak: [burakaltay375/PANTER](https://github.com/burakaltay375/PANTER) (public). `BURAK` deposu özel olduğu için bu public kopya kullanıldı.
+## Environment setup
 
-## Yerel çalıştırma
+Environment templates live in `.env.example` files (placeholders only). Copy them to local env files and replace placeholders with your own values. **Never commit real secrets.**
 
-MongoDB, Python 3.12 ve Node.js 22 gerekir.
+| Template | Copy to | Used by |
+|----------|---------|---------|
+| `backend/.env.example` | `backend/.env` | FastAPI API (`backend/server.py`) |
+| `security-website/.env.example` | `security-website/.env.local` | Next.js landing + admin UI |
+| `frontend/.env.example` | `frontend/.env` | Expo mobile app |
+| [`.env.example`](.env.example) | *(reference only)* | Full list for the whole repo |
+
+### 1. Create local env files
+
+**macOS / Linux:**
 
 ```bash
-# 1. Ortam dosyaları
 cp backend/.env.example backend/.env
 cp security-website/.env.example security-website/.env.local
-
-# backend/.env içinde admin girişini ayarlayın:
-#   SYSTEM_ADMIN_EMAIL=admin@panter.local
-#   SYSTEM_ADMIN_PASSWORD=PanterAdmin123!
-#   JWT_SECRET=<uzun rastgele dize>
-#   MONGO_URL=mongodb://127.0.0.1:27017
-
-# 2. MongoDB (örnek: resmi community binary)
-# mongod --dbpath /tmp/panter-mongo-data --bind_ip 127.0.0.1 --port 27017
-
-# 3. Backend
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-local.txt
-uvicorn server:app --reload --host 0.0.0.0 --port 18080
-
-# 4. Web (ayrı terminal)
-cd security-website
-npm install
-npx next dev --hostname 0.0.0.0 --port 14321
+cp frontend/.env.example frontend/.env
 ```
 
-Operasyon web arayüzünü (Expo) siteye gömmek için:
+**Windows PowerShell:**
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+Copy-Item security-website\.env.example security-website\.env.local
+Copy-Item frontend\.env.example frontend\.env
+```
+
+Then edit each local file:
+
+- Set `SYSTEM_ADMIN_EMAIL` and `SYSTEM_ADMIN_PASSWORD` in `backend/.env` for admin login.
+- Change `JWT_SECRET` to a long random string before any shared or production deployment.
+- Point `MONGO_URL` at your MongoDB instance (local or Atlas).
+
+### 2. Variables by app
+
+**Backend (`backend/.env`)**
+
+| Variable | Development | Production |
+|----------|-------------|------------|
+| `MONGO_URL` | Required | Required |
+| `DB_NAME` | Required | Required |
+| `JWT_SECRET` | Required | Required (strong random secret) |
+| `SYSTEM_ADMIN_EMAIL` | Required | Required |
+| `SYSTEM_ADMIN_PASSWORD` | Required | Required (strong password) |
+| `OPENAI_API_KEY` | Required for reception AI | Required for reception AI |
+| `OPENAI_MODEL` | Optional (`gpt-4o-mini`) | Optional (`gpt-4o` or `gpt-4o-mini`) |
+| `OSM_USER_AGENT` | Optional; repository URL default is used | Recommended; identify the deployed Hospira instance |
+| `IDENTITY_ENCRYPTION_KEY` | Optional | Strongly recommended |
+| `EMERGENT_LLM_KEY` | Optional | Required if using AI / voice features |
+| `RESEND_API_KEY` | Optional (emails logged only) | Required for real email |
+| `EMAIL_FROM` | Optional | Required with Resend |
+
+**security-website (`security-website/.env.local`)**
+
+| Variable | Development | Production |
+|----------|-------------|------------|
+| `NEXT_PUBLIC_API_URL` | Required if backend is not on `http://localhost:8000/api` | Required (public URL, include `/api`) |
+| `NEXT_PUBLIC_PANTER_API_URL` | Optional alias | Optional alias |
+
+**frontend (`frontend/.env`)**
+
+| Variable | Development | Production |
+|----------|-------------|------------|
+| `EXPO_PUBLIC_BACKEND_URL` | Required if backend is not on `http://localhost:8000` | Required (public API origin, no `/api` suffix) |
+
+Keşfet and hotel previews use **Leaflet + OpenStreetMap** and require no map API key.
+Nearby businesses come from the OpenStreetMap Overpass API. “Konumu Bul” calls
+Nominatim only when the administrator presses the button; requests are cached and
+rate-limited by the backend. Browser geolocation works only on HTTPS origins or
+`localhost`.
+
+The public `tile.openstreetmap.org` service is suitable for normal interactive use,
+not bulk downloading or heavy production traffic. High-volume deployments should use
+an OSM-compatible hosted tile provider or self-hosted tiles while retaining attribution.
+
+**Optional frontend dev tooling** (commented in `frontend/.env.example`; not needed for normal app use):
+
+- `METRO_CACHE_ROOT` — custom Metro cache directory
+- `CMD_GUARD_RULES` — path to install-guard rules JSON
+- `CMD_GUARD_DEBUG` — enable install-guard debug logging
+
+### 3. Git and secrets
+
+These local files must stay out of Git:
+
+- `backend/.env`
+- `security-website/.env.local`
+- `frontend/.env`
+
+Only the `.env.example` templates are tracked in the repository.
+
+### 4. Run locally
+
+MongoDB must be reachable at `MONGO_URL` before starting the backend.
 
 ```bash
-bash scripts/build-ops-web.sh
+# Backend
+cd backend
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Hazır script: `bash scripts/dev.sh`
+```bash
+# Marketing + admin
+cd security-website
+npm install
+npm run dev
+# http://localhost:3000  |  admin: http://localhost:3000/admin
+```
 
-| Servis | Adres |
-|--------|--------|
-| Güvenlik sitesi | http://127.0.0.1:14321 |
-| Admin paneli | http://127.0.0.1:14321/admin |
-| Operasyon merkezi | http://127.0.0.1:14321/operasyon |
-| API | http://127.0.0.1:18080/api |
+```bash
+# Mobile (optional)
+cd frontend
+npm install
+npm start
+```
 
-Yerel girişler:
+Sign in to `/admin` with the `SYSTEM_ADMIN_EMAIL` and `SYSTEM_ADMIN_PASSWORD` values from your local `backend/.env`.
 
-- Admin: `admin@panter.local` / `PanterAdmin123!`
-- Otel müdürü: `manager@hotel.com` / `manager123`
-- Misafir: `misafir@hotel.com` / `misafir123`
-- Personel: `odaservisi@hotel.com` / `personel123`
+## Project layout
 
-`security-website` tarayıcıdaki `/api` isteklerini FastAPI’ye yönlendirir (`PANTER_BACKEND_ORIGIN`).
+| Path | Role |
+|------|------|
+| `backend/server.py` | FastAPI application entry |
+| `backend/requirements.txt` | Python dependencies |
+| `security-website/` | Next.js landing page + admin UI |
+| `frontend/` | Expo mobile client |
 
-Yapay zeka / ses özellikleri için tam `backend/requirements.txt` ve `EMERGENT_LLM_KEY` gerekir.
+## Production notes
+
+- Use unique, strong values for `JWT_SECRET`, `SYSTEM_ADMIN_PASSWORD`, and `IDENTITY_ENCRYPTION_KEY`.
+- Point `MONGO_URL` at a managed MongoDB service (for example Atlas) with a dedicated `DB_NAME`.
+- Set `NEXT_PUBLIC_API_URL` to your public API URL including `/api`; set `EXPO_PUBLIC_BACKEND_URL` to the same host without `/api`.
+- Configure `RESEND_API_KEY` and `EMAIL_FROM` if the app should send transactional email.
+- Store production secrets in your host’s secret manager or server env — not in Git.

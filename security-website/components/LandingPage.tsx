@@ -6,19 +6,15 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Download,
-  FileText,
   Globe2,
-  ImageIcon,
   Mail,
   MapPin,
   Menu,
-  Paperclip,
   Phone,
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { company, projectReferences, riskConsultingShowcase, securityPersonnelShowcase, technologyOperationsShowcase } from "@/content/site";
 
 const fadeUp = {
@@ -56,25 +52,13 @@ const heroSlides = [
   },
 ];
 
-type ChatAttachment = {
-  id: string;
-  file_name: string;
-  mime_type: string;
-  data_uri: string;
-  size: number;
-};
-
 type ChatMessage = {
   role: "assistant" | "user";
   text: string;
-  attachments?: ChatAttachment[];
 };
 
 type ChatMode = "general" | "quotation" | "recruitment" | "inspection" | "operationEvent";
 type AdminRequestType = "quotation" | "recruitment" | "inspection";
-type LeadPayload = {
-  attachments?: ChatAttachment[];
-} & Record<string, string | ChatAttachment[] | undefined>;
 
 type LeadField = {
   key: string;
@@ -82,19 +66,6 @@ type LeadField = {
   prompt: string;
   optional?: boolean;
 };
-
-const ACCEPTED_CHAT_FILE_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-];
-
-const ACCEPTED_CHAT_FILE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf", ".doc", ".docx"];
-const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 
 const initialPanterMessage =
   "Merhaba ben Panter. Panter Güvenlik hakkında merak ettiklerinizi cevaplamakla görevliyim. Nasıl yardımcı olabilirim?";
@@ -110,7 +81,7 @@ const quotationFields: LeadField[] = [
 ];
 
 const recruitmentFields: LeadField[] = [
-  { key: "cv", label: "CV", prompt: "İş başvurusu için CV dosyanızı PDF, DOCX veya fotoğraf olarak ekleyin (ataç ikonu). Dosyayı ekledikten sonra Gönder'e basın." },
+  { key: "cv", label: "CV", prompt: "İş başvurusu için CV dosyanızı PDF/DOCX olarak iletmeniz gerekir. Bu demo sohbet dosyayı okuyamaz; lütfen CV hazır mı, kısaca belirtin." },
   { key: "name", label: "Ad Soyad", prompt: "Adınızı ve soyadınızı yazar mısınız?" },
   { key: "phone", label: "Telefon", prompt: "Telefon numaranızı paylaşır mısınız?" },
   { key: "email", label: "E-posta", prompt: "E-posta adresinizi yazar mısınız?" },
@@ -157,21 +128,14 @@ const inspectionStatuses = [
   "Cancelled",
 ];
 
-function formatLeadSummary(title: string, fields: LeadField[], data: LeadPayload) {
+function formatLeadSummary(title: string, fields: LeadField[], data: Record<string, string>) {
   const lines = [
-    ...fields.map((field) => {
-      const value = data[field.key];
-      const display = typeof value === "string" && value ? value : field.optional ? "Belirtilmedi" : "-";
-      return `${field.label}: ${display}`;
-    }),
+    ...fields.map((field) => `${field.label}: ${data[field.key] || (field.optional ? "Belirtilmedi" : "-")}`),
   ];
-  if (data.attachments?.length) {
-    lines.push(`Ekler: ${data.attachments.map((file) => file.file_name).join(", ")}`);
-  }
   return title ? [title, ...lines].join("\n") : lines.join("\n");
 }
 
-function saveLocalRequest(type: string, payload: LeadPayload) {
+function saveLocalRequest(type: string, payload: Record<string, string>) {
   if (typeof window === "undefined") return;
   const key = "panter-ai-requests";
   const current = JSON.parse(window.localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
@@ -179,7 +143,7 @@ function saveLocalRequest(type: string, payload: LeadPayload) {
   window.localStorage.setItem(key, JSON.stringify(current));
 }
 
-async function saveAdminRequest(type: AdminRequestType, payload: LeadPayload) {
+async function saveAdminRequest(type: AdminRequestType, payload: Record<string, string>) {
   const apiBase = (process.env.NEXT_PUBLIC_PANTER_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
 
   try {
@@ -201,32 +165,26 @@ async function saveAdminRequest(type: AdminRequestType, payload: LeadPayload) {
   }
 }
 
-async function saveOperationEvent(payload: LeadPayload) {
+async function saveOperationEvent(payload: Record<string, string>) {
   const apiBase = (process.env.NEXT_PUBLIC_PANTER_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
-  const asText = (value: string | ChatAttachment[] | undefined) => (typeof value === "string" ? value : undefined);
 
   try {
     const response = await fetch(`${apiBase}/panter/operation-events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: asText(payload.title) || asText(payload.eventType) || "Panter AI Operasyon Etkinliği",
-        description: asText(payload.notes) || asText(payload.eventType),
-        date: asText(payload.date) || asText(payload.preferredDate),
-        start_time: asText(payload.start_time) || asText(payload.preferredTime),
-        end_time: asText(payload.end_time),
-        event_type: asText(payload.eventType) || "Other",
+        title: payload.title || payload.eventType || "Panter AI Operasyon Etkinliği",
+        description: payload.notes || payload.eventType,
+        date: payload.date || payload.preferredDate,
+        start_time: payload.start_time || payload.preferredTime,
+        end_time: payload.end_time,
+        event_type: payload.eventType || "Other",
         status: "Pending",
         priority: "Medium",
-        customer: asText(payload.customer) || asText(payload.company) || asText(payload.name),
-        project: asText(payload.project) || asText(payload.projectName),
-        address: asText(payload.address) || asText(payload.projectAddress),
-        notes: asText(payload.notes),
-        attachments: (payload.attachments || []).map(({ file_name, mime_type, data_uri }) => ({
-          file_name,
-          mime_type,
-          data_uri,
-        })),
+        customer: payload.customer || payload.company || payload.name,
+        project: payload.project || payload.projectName,
+        address: payload.address || payload.projectAddress,
+        notes: payload.notes,
       }),
     });
 
@@ -240,112 +198,6 @@ async function saveOperationEvent(payload: LeadPayload) {
     saveLocalRequest("operationEvent", payload);
     return false;
   }
-}
-
-function isAcceptedChatFile(file: File) {
-  const lowerName = file.name.toLowerCase();
-  const extensionOk = ACCEPTED_CHAT_FILE_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
-  const mimeOk = !file.type || ACCEPTED_CHAT_FILE_TYPES.includes(file.type);
-  return extensionOk && mimeOk;
-}
-
-function readFileAsDataUri(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error || new Error("Dosya okunamadı"));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function filesToAttachments(files: FileList | File[]) {
-  const list = Array.from(files);
-  const attachments: ChatAttachment[] = [];
-
-  for (const file of list) {
-    if (!isAcceptedChatFile(file)) {
-      throw new Error(`Desteklenmeyen dosya: ${file.name}. Fotoğraf, PDF veya DOCX yükleyin.`);
-    }
-    if (file.size > MAX_CHAT_FILE_BYTES) {
-      throw new Error(`${file.name} çok büyük. En fazla 8 MB yükleyebilirsiniz.`);
-    }
-    attachments.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      file_name: file.name,
-      mime_type: file.type || "application/octet-stream",
-      data_uri: await readFileAsDataUri(file),
-      size: file.size,
-    });
-  }
-
-  return attachments;
-}
-
-function downloadAttachment(attachment: ChatAttachment) {
-  const link = document.createElement("a");
-  link.href = attachment.data_uri;
-  link.download = attachment.file_name || "panter-dosya";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function isImageAttachment(attachment: ChatAttachment) {
-  return attachment.mime_type.startsWith("image/") || /\.(jpe?g|png|webp|gif)$/i.test(attachment.file_name);
-}
-
-function ChatAttachmentList({
-  attachments,
-  tone = "light",
-}: {
-  attachments: ChatAttachment[];
-  tone?: "light" | "dark";
-}) {
-  if (!attachments.length) return null;
-
-  return (
-    <div className="mt-3 space-y-2">
-      {attachments.map((attachment) => (
-        <div
-          key={attachment.id}
-          className={`overflow-hidden rounded-xl border ${tone === "dark" ? "border-white/25 bg-white/10" : "border-zinc-200 bg-white"}`}
-        >
-          {isImageAttachment(attachment) ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={attachment.data_uri} alt={attachment.file_name} className="max-h-40 w-full object-cover" />
-          ) : null}
-          <div className="flex items-center gap-2 px-3 py-2">
-            {isImageAttachment(attachment) ? (
-              <ImageIcon className={`h-4 w-4 shrink-0 ${tone === "dark" ? "text-cyan-100" : "text-red-600"}`} />
-            ) : (
-              <FileText className={`h-4 w-4 shrink-0 ${tone === "dark" ? "text-cyan-100" : "text-red-600"}`} />
-            )}
-            <div className="min-w-0 flex-1">
-              <p className={`truncate text-xs font-semibold ${tone === "dark" ? "text-white" : "text-zinc-900"}`}>{attachment.file_name}</p>
-              <p className={`text-[11px] ${tone === "dark" ? "text-white/70" : "text-zinc-500"}`}>{formatFileSize(attachment.size)}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => downloadAttachment(attachment)}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
-                tone === "dark" ? "bg-white/15 text-white hover:bg-white/25" : "bg-zinc-100 text-zinc-800 hover:bg-zinc-200"
-              }`}
-              aria-label={`${attachment.file_name} dosyasını indir`}
-            >
-              <Download className="h-3.5 w-3.5" />
-              İndir
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function adminSaveMessage(savedToBackend: boolean) {
@@ -497,32 +349,20 @@ function extractInfo(message: string, mode: ChatMode) {
   return info;
 }
 
-function getMissingField(fields: LeadField[], data: LeadPayload) {
-  return fields.find((field) => {
-    const value = data[field.key];
-    return !field.optional && !(typeof value === "string" && value.trim());
-  });
+function getMissingField(fields: LeadField[], data: Record<string, string>) {
+  return fields.find((field) => !field.optional && !data[field.key]);
 }
 
-function mergeLeadData(current: LeadPayload, message: string, mode: ChatMode, activeField?: LeadField): LeadPayload {
+function mergeLeadData(current: Record<string, string>, message: string, mode: ChatMode, activeField?: LeadField) {
   const normalized = normalizeText(message);
   const extracted = extractInfo(message, mode);
-  const next: LeadPayload = { ...current, ...extracted };
+  const next = { ...current, ...extracted };
 
-  if (activeField && !(typeof next[activeField.key] === "string" && next[activeField.key])) {
+  if (activeField && !next[activeField.key]) {
     const skipOptional = activeField.optional && ["gec", "geç", "yok", "hayir", "hayır"].includes(normalized);
     next[activeField.key] = skipOptional ? "" : message;
   }
 
-  return next;
-}
-
-function withChatAttachments(data: LeadPayload, files: ChatAttachment[]): LeadPayload {
-  const merged = [...(data.attachments || []), ...files];
-  const next: LeadPayload = { ...data, attachments: merged };
-  if (files.length && !(typeof next.cv === "string" && next.cv)) {
-    next.cv = files.map((file) => file.file_name).join(", ");
-  }
   return next;
 }
 
@@ -608,7 +448,7 @@ function Navbar() {
             <span className="flex items-center gap-1">Kurumsal web sitesi <ChevronDown className="h-3 w-3" /></span>
           </div>
           <div className="flex items-center gap-4">
-            <a href="/operasyon" className="font-medium hover:text-red-600">Operasyon merkezi</a>
+            <a href="/operasyon" className="font-medium hover:text-red-600">Hospira</a>
             <a href="/admin" className="font-medium hover:text-red-600">Admin</a>
             <a href={company.phoneHref} className="font-medium hover:text-red-600">Ara / İletişim</a>
           </div>
@@ -625,7 +465,7 @@ function Navbar() {
             </a>
           ))}
           <a href="/operasyon" className="text-sm font-semibold text-red-600 transition hover:text-red-700">
-            Operasyon
+            Hospira
           </a>
           <a href="/admin" className="text-sm font-semibold text-zinc-900 transition hover:text-red-600">
             Admin
@@ -655,7 +495,7 @@ function Navbar() {
               </a>
             ))}
             <a href="/operasyon" onClick={() => setOpen(false)} className="border-b border-zinc-100 px-2 py-3 font-semibold text-red-600">
-              Operasyon merkezi
+              Hospira operasyon merkezi
             </a>
             <a href="/admin" onClick={() => setOpen(false)} className="px-2 py-3 font-semibold text-zinc-900">
               Admin paneli
@@ -712,14 +552,9 @@ function Hero() {
               Panter, işletmelerin insanlarını, varlıklarını ve operasyonlarını profesyonel ekiplerle korur.
             </p>
             <p className="mt-4 text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">{slide.label}</p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#services" className="inline-flex items-center gap-3 bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700">
-                Hizmetleri keşfet <ArrowRight className="h-5 w-5" />
-              </a>
-              <a href="/operasyon" className="inline-flex items-center gap-3 border border-white/40 px-6 py-3 font-semibold text-white transition hover:bg-white/10">
-                Operasyon merkezini aç
-              </a>
-            </div>
+            <a href="#services" className="mt-8 inline-flex items-center gap-3 bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700">
+              Hizmetleri keşfet <ArrowRight className="h-5 w-5" />
+            </a>
           </motion.div>
           <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-4 bg-black py-4" onClick={(event) => event.stopPropagation()}>
             <button
@@ -1039,10 +874,7 @@ function PanterAssistant() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<ChatMode>("general");
-  const [leadData, setLeadData] = useState<LeadPayload>({});
-  const [pendingFiles, setPendingFiles] = useState<ChatAttachment[]>([]);
-  const [fileError, setFileError] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [leadData, setLeadData] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -1050,46 +882,16 @@ function PanterAssistant() {
     },
   ]);
 
-  const attachSelectedFiles = async (fileList: FileList | null) => {
-    if (!fileList?.length) return;
-    setFileError("");
-    try {
-      const next = await filesToAttachments(fileList);
-      setPendingFiles((current) => [...current, ...next]);
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : "Dosya eklenemedi.");
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const removePendingFile = (id: string) => {
-    setPendingFiles((current) => current.filter((file) => file.id !== id));
-  };
-
   const sendMessage = async () => {
     const question = input.trim();
-    const outgoingFiles = pendingFiles;
-    if (!question && !outgoingFiles.length) return;
+    if (!question) return;
 
-    const displayText = question || (outgoingFiles.length ? `Dosya eklendi: ${outgoingFiles.map((file) => file.file_name).join(", ")}` : "");
-    const normalized = normalizeText(question || displayText);
-    const userMessage: ChatMessage = {
-      role: "user",
-      text: displayText,
-      attachments: outgoingFiles.length ? outgoingFiles : undefined,
-    };
-
-    const finishTurn = () => {
-      setInput("");
-      setPendingFiles([]);
-      setFileError("");
-    };
+    const normalized = normalizeText(question);
+    const userMessage: ChatMessage = { role: "user", text: question };
 
     if (mode === "quotation") {
       const activeField = getMissingField(quotationFields, leadData);
-      let nextData = mergeLeadData(leadData, question || displayText, "quotation", activeField);
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData(leadData, question, "quotation", activeField);
       const missingField = getMissingField(quotationFields, nextData);
 
       if (missingField) {
@@ -1112,18 +914,16 @@ function PanterAssistant() {
           {
             role: "assistant",
             text: `${formatLeadSummary("Teklif talebiniz oluşturuldu:", quotationFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}`,
-            attachments: nextData.attachments,
           },
         ]);
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (mode === "recruitment") {
       const activeField = getMissingField(recruitmentFields, leadData);
-      let nextData = mergeLeadData(leadData, question || displayText, "recruitment", activeField);
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData(leadData, question, "recruitment", activeField);
       const missingField = getMissingField(recruitmentFields, nextData);
 
       if (missingField) {
@@ -1134,7 +934,6 @@ function PanterAssistant() {
           {
             role: "assistant",
             text: `Teşekkürler. Verdiğiniz bilgileri not ettim. Eksik olan bilgi: ${missingField.prompt}`,
-            attachments: outgoingFiles.length ? outgoingFiles : undefined,
           },
         ]);
       } else {
@@ -1146,19 +945,17 @@ function PanterAssistant() {
           userMessage,
           {
             role: "assistant",
-            text: `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}${nextData.attachments?.length ? " CV / dosya ekleriniz talebe kaydedildi; aşağıdaki İndir ile tekrar indirebilirsiniz." : ""}`,
-            attachments: nextData.attachments,
+            text: `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)} CV dosyasını okuyup otomatik puanlama yapmak için dosya yükleme altyapısı ayrıca eklenmelidir.`,
           },
         ]);
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (mode === "inspection") {
       const activeField = getMissingField(inspectionFields, leadData);
-      let nextData = mergeLeadData(leadData, question || displayText, "inspection", activeField);
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData(leadData, question, "inspection", activeField);
       const missingField = getMissingField(inspectionFields, nextData);
 
       if (missingField) {
@@ -1186,18 +983,16 @@ function PanterAssistant() {
           {
             role: "assistant",
             text: `${formatLeadSummary("İnceleme randevu talebiniz oluşturuldu:", inspectionFields, inspectionRequest)}\nDurum: ${inspectionRequest.status}\n\n${adminSaveMessage(savedToBackend)}`,
-            attachments: inspectionRequest.attachments,
           },
         ]);
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (mode === "operationEvent") {
       const activeField = getMissingField(operationEventFields, leadData);
-      let nextData = mergeLeadData(leadData, question || displayText, "operationEvent", activeField);
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData(leadData, question, "operationEvent", activeField);
       const missingField = getMissingField(operationEventFields, nextData);
 
       if (missingField) {
@@ -1220,17 +1015,15 @@ function PanterAssistant() {
           {
             role: "assistant",
             text: `${formatLeadSummary("Operasyon takvimi etkinliği oluşturuldu:", operationEventFields, nextData)}\n\n${savedToBackend ? "Etkinlik operasyon takvimine eklendi ve yöneticilerin panelinde görünecek." : "Backend şu anda erişilemediği için etkinlik geçici olarak tarayıcıda saklandı."}`,
-            attachments: nextData.attachments,
           },
         ]);
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (["inceleme", "denetim", "audit", "risk", "zayif", "zayıf", "proje kontrol", "proje inceleme", "keşif", "kesif"].some((word) => normalized.includes(normalizeText(word)))) {
-      let nextData = mergeLeadData({}, question || displayText, "inspection");
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData({}, question, "inspection");
       const missingField = getMissingField(inspectionFields, nextData);
       const inspectionRequest = { ...nextData, status: inspectionStatuses[0], inspectionType: nextData.reason || "Güvenlik proje incelemesi" };
       const savedToBackend = missingField ? false : await saveAdminRequest("inspection", inspectionRequest);
@@ -1244,20 +1037,18 @@ function PanterAssistant() {
           text: missingField
             ? `Güvenlik proje incelemesi için yardımcı olurum. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", inspectionFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
             : `${formatLeadSummary("İnceleme randevu talebiniz oluşturuldu:", inspectionFields, inspectionRequest)}\nDurum: ${inspectionStatuses[0]}\n\n${adminSaveMessage(savedToBackend)}`,
-          attachments: nextData.attachments,
         },
       ]);
       if (!missingField) {
         setMode("general");
         setLeadData({});
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (["toplanti", "toplantı", "meeting", "egitim", "eğitim", "training", "saha kesfi", "saha keşfi", "site survey", "ic toplanti", "iç toplantı", "bakim", "bakım", "maintenance", "hatirlatma", "hatırlatma"].some((word) => normalized.includes(normalizeText(word)))) {
-      let nextData = mergeLeadData({}, question || displayText, "operationEvent");
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData({}, question, "operationEvent");
       const missingField = getMissingField(operationEventFields, nextData);
       const savedToBackend = missingField ? false : await saveOperationEvent(nextData);
       setMode("operationEvent");
@@ -1270,20 +1061,18 @@ function PanterAssistant() {
           text: missingField
             ? `Bu talebi operasyon takvimine ekleyebilirim. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", operationEventFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
             : `${formatLeadSummary("Operasyon takvimi etkinliği oluşturuldu:", operationEventFields, nextData)}\n\n${savedToBackend ? "Etkinlik operasyon takvimine eklendi ve yöneticilere bildirilecek." : "Backend şu anda erişilemediği için etkinlik geçici olarak tarayıcıda saklandı."}`,
-          attachments: nextData.attachments,
         },
       ]);
       if (!missingField) {
         setMode("general");
         setLeadData({});
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (["teklif", "fiyat", "ucret", "ücret", "maliyet"].some((word) => normalized.includes(word))) {
-      let nextData = mergeLeadData({}, question || displayText, "quotation");
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData({}, question, "quotation");
       const missingField = getMissingField(quotationFields, nextData);
       const savedToBackend = missingField ? false : await saveAdminRequest("quotation", nextData);
       setMode("quotation");
@@ -1296,20 +1085,18 @@ function PanterAssistant() {
           text: missingField
             ? `Teklif talebi için yardımcı olurum. Mesajınızdan anladıklarımı not ettim.\n\n${formatLeadSummary("", quotationFields, nextData).trim()}\n\nEksik olan bilgi: ${missingField.prompt}`
             : `${formatLeadSummary("Teklif talebiniz oluşturuldu:", quotationFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}`,
-          attachments: nextData.attachments,
         },
       ]);
       if (!missingField) {
         setMode("general");
         setLeadData({});
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
     if (["basvuru", "başvuru", "kariyer", "cv", "is", "iş"].some((word) => normalized.includes(word))) {
-      let nextData = mergeLeadData({}, question || displayText, "recruitment");
-      if (outgoingFiles.length) nextData = withChatAttachments(nextData, outgoingFiles);
+      const nextData = mergeLeadData({}, question, "recruitment");
       const missingField = getMissingField(recruitmentFields, nextData);
       const savedToBackend = missingField ? false : await saveAdminRequest("recruitment", nextData);
       setMode("recruitment");
@@ -1321,42 +1108,19 @@ function PanterAssistant() {
           role: "assistant",
           text: missingField
             ? `Başvuru için yardımcı olurum. Paylaştığınız bilgileri not ettim. Eksik olan bilgi: ${missingField.prompt}`
-            : `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)}${nextData.attachments?.length ? " CV / dosya ekleriniz talebe kaydedildi." : ""}`,
-          attachments: nextData.attachments,
+            : `${formatLeadSummary("Başvuru ön bilginiz alındı:", recruitmentFields, nextData)}\n\n${adminSaveMessage(savedToBackend)} CV dosyasını okuyup otomatik puanlama yapmak için dosya yükleme altyapısı ayrıca eklenmelidir.`,
         },
       ]);
       if (!missingField) {
         setMode("general");
         setLeadData({});
       }
-      finishTurn();
+      setInput("");
       return;
     }
 
-    if (outgoingFiles.length && !question) {
-      setMessages((current) => [
-        ...current,
-        userMessage,
-        {
-          role: "assistant",
-          text: "Dosyanızı aldım. Fotoğraf, PDF veya DOCX eklerini buradan indirebilirsiniz. Başvuru için 'CV' veya 'iş başvurusu', teklif için 'teklif' yazabilirsiniz.",
-          attachments: outgoingFiles,
-        },
-      ]);
-      finishTurn();
-      return;
-    }
-
-    setMessages((current) => [
-      ...current,
-      userMessage,
-      {
-        role: "assistant",
-        text: getPanterResponse(question || displayText),
-        attachments: outgoingFiles.length ? outgoingFiles : undefined,
-      },
-    ]);
-    finishTurn();
+    setMessages((current) => [...current, userMessage, { role: "assistant", text: getPanterResponse(question) }]);
+    setInput("");
   };
 
   return (
@@ -1374,7 +1138,7 @@ function PanterAssistant() {
             <div className="flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
               <div>
                 <p className="text-sm font-extrabold uppercase tracking-wide text-zinc-950">Panter AI</p>
-                <p className="text-xs text-zinc-500">Dosya, fotoğraf, PDF ve DOCX ekleyebilirsiniz</p>
+                <p className="text-xs text-zinc-500">Panter Güvenlik asistanı</p>
               </div>
               <button
                 type="button"
@@ -1389,66 +1153,24 @@ function PanterAssistant() {
             <div className="mt-4 max-h-72 space-y-3 overflow-y-auto pr-1">
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 whitespace-pre-wrap ${message.role === "user" ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-800"}`}>
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-red-600 text-white" : "bg-zinc-100 text-zinc-800"}`}>
                     {message.text}
-                    {message.attachments?.length ? (
-                      <ChatAttachmentList attachments={message.attachments} tone={message.role === "user" ? "dark" : "light"} />
-                    ) : null}
                   </div>
                 </div>
               ))}
             </div>
 
-            {pendingFiles.length > 0 && (
-              <div className="mt-3 space-y-2 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-3">
-                {pendingFiles.map((file) => (
-                  <div key={file.id} className="flex items-center gap-2">
-                    {isImageAttachment(file) ? <ImageIcon className="h-4 w-4 text-red-600" /> : <FileText className="h-4 w-4 text-red-600" />}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-semibold text-zinc-900">{file.file_name}</p>
-                      <p className="text-[11px] text-zinc-500">{formatFileSize(file.size)}</p>
-                    </div>
-                    <button type="button" onClick={() => downloadAttachment(file)} className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-zinc-700" aria-label={`${file.file_name} indir`}>
-                      İndir
-                    </button>
-                    <button type="button" onClick={() => removePendingFile(file.id)} className="rounded-full p-1 text-zinc-500 hover:bg-white" aria-label={`${file.file_name} kaldır`}>
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {fileError ? <p className="mt-2 text-xs text-red-600">{fileError}</p> : null}
-
             <form
               className="mt-4 flex gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                void sendMessage();
+                sendMessage();
               }}
             >
               <input
-                ref={fileInputRef}
-                type="file"
-                accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                multiple
-                className="hidden"
-                onChange={(event) => void attachSelectedFiles(event.target.files)}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="rounded-full border border-zinc-200 p-3 text-zinc-700 transition hover:border-red-600 hover:text-red-700"
-                aria-label="Dosya, fotoğraf, PDF veya DOCX ekle"
-                title="Dosya / fotoğraf / PDF / DOCX"
-              >
-                <Paperclip className="h-4 w-4" />
-              </button>
-              <input
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="Sorunuzu yazın veya dosya ekleyin..."
+                placeholder="Sorunuzu yazın..."
                 className="min-w-0 flex-1 rounded-full border border-zinc-200 px-4 py-3 text-sm text-zinc-900 outline-none transition focus:border-red-600"
               />
               <button type="submit" className="rounded-full bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700">

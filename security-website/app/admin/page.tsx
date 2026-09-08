@@ -3,8 +3,7 @@
 import { FormEvent, useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import { useAdminResource } from "@/hooks/useAdminResource";
-import { panterAdminApi, type Appointment, type PanterCv, type PanterProject, type PanterRequest, type ProjectInput, type ShiftEmployeeInput, type ShiftPlan, type ShiftPlanInput, type SupportRequestInput } from "@/lib/panterAdminApi";
-import { downloadExcel, downloadPdf } from "@/lib/exportUtils";
+import { panterAdminApi, type Appointment, type PanterProject, type PanterRequest, type ProjectInput, type ShiftEmployeeInput, type ShiftPlan, type ShiftPlanInput, type SupportRequestInput } from "@/lib/panterAdminApi";
 
 const inspectionStatuses = [
   "Pending Inspection",
@@ -296,10 +295,9 @@ async function readFileAsDataUri(file: File) {
   });
 }
 
-const appointmentExportHeaders = ["Başlık", "Tür", "Tarih", "Başlangıç", "Bitiş", "Öncelik", "Durum", "Personel", "Müşteri", "Proje", "Adres", "Notlar", "Açıklama"];
-
-function appointmentExportRows(events: Appointment[]) {
-  return events.map((event) => [
+function exportEvents(events: Appointment[]) {
+  const headers = ["Başlık", "Tür", "Tarih", "Başlangıç", "Bitiş", "Öncelik", "Durum", "Personel", "Müşteri", "Proje", "Adres", "Notlar"];
+  const rows = events.map((event) => [
     event.title,
     event.event_type || "",
     event.date,
@@ -312,112 +310,14 @@ function appointmentExportRows(events: Appointment[]) {
     event.project || "",
     event.address || "",
     event.notes || "",
-    event.description || "",
   ]);
-}
-
-function exportCalendarToExcel(events: Appointment[], fileName = "panter-operasyon-takvimi") {
-  downloadExcel(fileName, "Operasyon Takvimi", appointmentExportHeaders, appointmentExportRows(events));
-}
-
-function exportCalendarToPdf(events: Appointment[], fileName = "panter-operasyon-takvimi") {
-  const lines = events.flatMap((event, index) => [
-    `${index + 1}. ${event.title}`,
-    `Tur: ${event.event_type || "-"} | Tarih: ${event.date} | Saat: ${event.start_time || "-"}-${event.end_time || "-"}`,
-    `Durum: ${event.status || "-"} | Oncelik: ${event.priority || "-"} | Personel: ${event.assigned_employee_name || "-"}`,
-    `Musteri: ${event.customer || "-"} | Proje: ${event.project || "-"}`,
-    `Adres: ${event.address || "-"}`,
-    `Notlar: ${event.notes || event.description || "-"}`,
-    "",
-  ]);
-  downloadPdf(fileName, "Panter Operasyon Takvimi", lines.length ? lines : ["Kayit bulunamadi."]);
-}
-
-function exportEventToExcel(event: Appointment) {
-  exportCalendarToExcel([event], `panter-etkinlik-${event.date || "kayit"}`);
-}
-
-function exportEventToPdf(event: Appointment) {
-  exportCalendarToPdf([event], `panter-etkinlik-${event.date || "kayit"}`);
-}
-
-function exportCvsToPdf(cvs: PanterCv[]) {
-  const lines = cvs.flatMap((cv, index) => [
-    `${index + 1}. ${cv.candidate_name}`,
-    `E-posta: ${cv.email || "-"} | Telefon: ${cv.phone || "-"}`,
-    `Dosya: ${cv.file_name} | Durum: ${cv.status} | AI Puani: ${cv.ai_score}`,
-    `Notlar: ${cv.notes || "-"}`,
-    `Mulakat: ${cv.interview_at || "-"} | Olusturma: ${cv.created_at}`,
-    "",
-  ]);
-  downloadPdf("panter-cv-yonetimi", "Panter CV Yonetimi", lines.length ? lines : ["CV kaydi yok."]);
-}
-
-function exportProjectsToExcel(projects: PanterProject[]) {
-  const headers = [
-    "Proje Adı",
-    "Proje Kodu",
-    "Müşteri",
-    "Durum",
-    "Başlangıç",
-    "Bitiş",
-    "Toplam Personel",
-    "Silahlı",
-    "Silahsız",
-    "Vardiya Amiri",
-    "Vardiya Sayısı",
-    "Vardiya Süresi",
-    "Post Sayısı",
-  ];
-  const rows = projects.map((project) => [
-    project.project_name,
-    project.project_code || "",
-    project.customer_company_name,
-    project.project_status,
-    project.project_start_date,
-    project.project_end_date || "",
-    project.personnel_requirements.total_required_personnel,
-    project.personnel_requirements.required_armed_security_guards,
-    project.personnel_requirements.required_unarmed_security_guards,
-    project.personnel_requirements.required_shift_supervisors,
-    project.shift_configuration.number_of_shifts,
-    project.shift_configuration.shift_duration,
-    project.security_posts.length,
-  ]);
-  downloadExcel("panter-guvenlik-projeleri", "Güvenlik Projeleri", headers, rows);
-}
-
-function exportShiftPlansToExcel(plans: ShiftPlan[]) {
-  const headers = [
-    "Proje",
-    "Durum",
-    "Önerilen Seçenek",
-    "Toplam Personel",
-    "Toplam Saat",
-    "Fazla Mesai Saati",
-    "İşçilik Maliyeti",
-    "Fazla Mesai Maliyeti",
-    "Kapsama %",
-    "Optimizasyon Puanı",
-    "Oluşturma",
-  ];
-  const rows = plans.map((plan) => {
-    const analysis = plan.schedule?.analysis || {};
-    return [
-      plan.project,
-      plan.status,
-      plan.recommended_option || "",
-      analysis.total_employees || 0,
-      analysis.total_working_hours || 0,
-      analysis.overtime_hours || 0,
-      analysis.estimated_labor_cost || 0,
-      analysis.estimated_overtime_cost || 0,
-      analysis.coverage_percentage || 0,
-      analysis.optimization_score || 0,
-      plan.created_at,
-    ];
-  });
-  downloadExcel("panter-vardiya-planlari", "Vardiya Planları", headers, rows);
+  const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "panter-operasyon-takvimi.csv";
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function isoDate(date: Date) {
@@ -1249,10 +1149,6 @@ export default function AdminPage() {
                   </div>
 
                   <div className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-xl shadow-zinc-200/70">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-bold uppercase tracking-[0.16em] text-zinc-500">Kayıtlı Projeler</p>
-                      <button type="button" onClick={() => exportProjectsToExcel(projects.data || [])} className="btn-secondary">Excel&apos;e Aktar</button>
-                    </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} className="input" placeholder="Projelerde ara" />
                       <select value={projectStatusFilter} onChange={(event) => setProjectStatusFilter(event.target.value)} className="input">
@@ -1450,9 +1346,6 @@ export default function AdminPage() {
             </Section>
 
             <Section title="CV Yönetimi" error={cvs.error}>
-              <div className="mb-3 flex flex-wrap gap-2">
-                <button type="button" onClick={() => exportCvsToPdf(cvs.data || [])} className="btn-secondary">CV Listesini PDF Aktar</button>
-              </div>
               <div className="grid gap-3 md:grid-cols-5">
                 <input value={cvSearch} onChange={(event) => setCvSearch(event.target.value)} className="input" placeholder="Ara" />
                 <select value={cvStatus} onChange={(event) => setCvStatus(event.target.value)} className="input">
@@ -1544,8 +1437,7 @@ export default function AdminPage() {
                   Sonraki
                 </button>
                 <button type="button" onClick={() => window.print()} className="btn-secondary">Yazdır</button>
-                <button type="button" onClick={() => exportCalendarToExcel(appointments.data || [])} className="btn-secondary">Takvimi Excel&apos;e Aktar</button>
-                <button type="button" onClick={() => exportCalendarToPdf(appointments.data || [])} className="btn-secondary">Takvimi PDF Aktar</button>
+                <button type="button" onClick={() => exportEvents(appointments.data || [])} className="btn-secondary">Dışa Aktar</button>
               </div>
 
               <div className="mt-5 grid gap-3 md:grid-cols-4">
@@ -1641,8 +1533,6 @@ export default function AdminPage() {
                               notes: item.notes || "",
                             });
                           }} className="btn-secondary">Düzenle</button>
-                          <button type="button" onClick={() => exportEventToExcel(item)} className="btn-secondary">Excel</button>
-                          <button type="button" onClick={() => exportEventToPdf(item)} className="btn-secondary">PDF</button>
                           <button type="button" onClick={() => runAction(() => panterAdminApi.deleteAppointment(token, item.id), appointments.reload)} className="btn-secondary">Sil</button>
                         </div>
                       </article>
@@ -1805,8 +1695,6 @@ export default function AdminPage() {
                 <div className="mt-5 flex flex-wrap gap-2">
                   <button type="button" onClick={generateShiftPlan} className="btn">Optimize Vardiya Planı Oluştur</button>
                   <button type="button" onClick={() => window.print()} className="btn-secondary">Yazdır</button>
-                  <button type="button" onClick={() => exportShiftPlansToExcel(shiftPlans.data || [])} className="btn-secondary">Tüm Planları Excel&apos;e Aktar</button>
-                  <button type="button" onClick={() => exportProjectsToExcel(projects.data || [])} className="btn-secondary">Güvenlik Projelerini Excel&apos;e Aktar</button>
                 </div>
               </div>
 

@@ -59,7 +59,7 @@ export default function AdminRoomMap() {
     <SafeAreaView style={s.root} edges={["top"]} testID="admin-room-map-screen">
       <View style={s.header}>
         <Text style={s.title}>Oda Haritası</Text>
-        <Text style={s.sub}>{rooms.length} oda · {stats.available} boş · {stats.occupied + stats.reserved} dolu/rezerve</Text>
+        <Text style={s.sub}>{rooms.length} oda · {stats.available} boş · {stats.occupied + stats.reserved} dolu</Text>
         {err && <Text style={s.err}>{err}</Text>}
         <View style={s.legend}>
           {(Object.keys(STATUS_LABEL) as Room["status"][]).map((status) => (

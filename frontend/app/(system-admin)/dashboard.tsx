@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-nat
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { api } from "@/src/api";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 type Stats = {
@@ -12,7 +13,6 @@ type Stats = {
   staff: number;
   guests: number;
   users: number;
-  reservations: number;
   requests: number;
   ai_messages: number;
 };
@@ -48,6 +48,7 @@ export default function SystemDashboard() {
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="system-admin-dashboard-screen">
       <ScrollView contentContainerStyle={s.content}>
+        <HospiraBrand compact />
         <Text style={s.title}>Sistem Yönetimi</Text>
         <Text style={s.sub}>Platform geneli · Sadece sistem yöneticisi</Text>
 
@@ -58,7 +59,6 @@ export default function SystemDashboard() {
           <Metric label="Staff" value={stats.staff} accent={COLORS.onSurfaceSecondary} testID="system-metric-staff" />
           <Metric label="Guest" value={stats.guests} accent={COLORS.warning} testID="system-metric-guests" />
           <Metric label="Kullanıcı" value={stats.users} accent={COLORS.onSurface} testID="system-metric-users" />
-          <Metric label="Rezervasyon" value={stats.reservations} accent={COLORS.warning} testID="system-metric-reservations" />
           <Metric label="Talep" value={stats.requests} accent={COLORS.onSurfaceSecondary} testID="system-metric-requests" />
           <Metric label="AI Mesaj" value={stats.ai_messages} accent={COLORS.brand} testID="system-metric-ai" />
         </View>

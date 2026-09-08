@@ -1,6 +1,7 @@
 // Backend API client (Otel Akıllı Operasyon Merkezi)
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import type { DiscoverPlaceType, NearbyPlace as MapNearbyPlace } from "./components/discover-map-types";
 import { storage } from "./utils/storage";
 
 const envBackend = (process.env.EXPO_PUBLIC_BACKEND_URL ?? "").trim();
@@ -58,20 +59,111 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+export type UploadAsset = {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  file?: Blob | null;
+  duration?: number | null;
+};
+
+function appendUpload(form: FormData, key: string, asset: UploadAsset) {
+  if (Platform.OS === "web" && asset.file) {
+    form.append(key, asset.file, asset.fileName || "upload");
+    return;
+  }
+  form.append(key, {
+    uri: asset.uri,
+    name: asset.fileName || "upload",
+    type: asset.mimeType || "application/octet-stream",
+  } as any);
+}
+
+async function requestMultipart<T>(path: string, form: FormData, method = "POST"): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: await authHeaders(),
+    body: form,
+  });
+  const text = await res.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text || null; }
+  if (!res.ok) {
+    throw new Error(data?.detail || (typeof data === "string" ? data : null) || "Dosya yüklenemedi");
+  }
+  return data as T;
+}
+
+export function resolveApiUrl(path?: string | null): string | null {
+  if (!path) return null;
+  return /^https?:\/\//i.test(path) ? path : `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+async function downloadFile(path: string, filename: string): Promise<void> {
+  const headers = await authHeaders();
+  if (Platform.OS === "web") {
+    const res = await fetch(`${API}${path}`, { headers });
+    if (!res.ok) throw new Error((await res.text()) || "Dosya indirilemedi");
+    const url = URL.createObjectURL(await res.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+  const FileSystem = await import("expo-file-system/legacy");
+  const Sharing = await import("expo-sharing");
+  if (!FileSystem.cacheDirectory) throw new Error("Geçici dosya dizini bulunamadı");
+  const result = await FileSystem.downloadAsync(`${API}${path}`, `${FileSystem.cacheDirectory}${filename}`, { headers });
+  if (!(await Sharing.isAvailableAsync())) throw new Error("Dosya paylaşımı bu cihazda kullanılamıyor");
+  await Sharing.shareAsync(result.uri, {
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    dialogTitle: "Planlama Excel dosyasını kaydet",
+    UTI: "org.openxmlformats.spreadsheetml.sheet",
+  });
+}
+
 export type Role = "system_admin" | "hotel_manager" | "staff" | "guest";
 export type GuestType = "standard" | "vip" | "casino";
-export type PaymentStatus = "pending" | "paid" | "casino_guest" | "vip_guest" | "company_paid";
 export type HotelServices = Record<string, boolean>;
 
 export type User = {
   id: string; email: string; name: string; role: Role;
-  department?: string | null; room_no?: string | null;
+  department?: string | null; position?: string | null; room_no?: string | null;
   gender?: string | null; birth_date?: string | null; age?: number | null;
   nationality?: string | null; country?: string | null; region_city?: string | null;
-  hotel_id?: string | null; hotelId?: string | null; guest_type?: GuestType | null; identity_status?: string | null; active?: boolean;
+  hotel_id?: string | null; hotelId?: string | null; guest_type?: GuestType | null; active?: boolean;
 };
 
 export type AuthOut = { token: string; user: User };
+
+export type DepartmentSchedule = {
+  id: string;
+  employee_id: string;
+  employee_name: string;
+  department: string;
+  position?: string | null;
+  date: string;
+  start_time: string;
+  end_time: string;
+  task: string;
+  status: "Draft" | "Approved";
+  approved_by?: string | null;
+  approved_at?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DepartmentScheduleInput = {
+  employee_id: string;
+  department?: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  task: string;
+};
 
 export type RequestItem = {
   id: string; guest_id: string; guest_name: string; room_no: string;
@@ -84,70 +176,27 @@ export type RequestItem = {
   created_at: string; updated_at: string;
 };
 
-export type IdentityAlert = {
-  id: string;
-  hotel_id: string;
-  hotelId: string;
-  reservation_id?: string | null;
-  title: string;
-  detail: string;
-  severity: "success" | "warning" | "danger" | string;
-  read?: boolean;
-  created_at: string;
-};
-
-export type ReservationStatus = "pending" | "checked_in" | "completed" | "cancelled";
-
-export type Reservation = {
-  id: string;
-  customer_name: string;
-  customer_email: string;
-  customer_phone: string;
-  capacity?: number | null;
-  room_id?: string | null;
-  room_number?: string | null;
-  room_name?: string | null;
-  price_per_night?: number | null;
-  total_nights?: number | null;
-  total_price?: number | null;
-  check_in_date?: string | null;
-  check_out_date?: string | null;
-  status: ReservationStatus;
-  access_code: string;
-  user_id?: string | null;
-  email_sent?: boolean;
-  hotel_id?: string | null;
-  payment_status: PaymentStatus;
-  guest_type: GuestType;
-  identity_verification_requested: boolean;
-  identity_status: "not_required" | "waiting_for_verification" | "partially_verified" | "fully_verified" | "verification_failed" | "pending_review" | "verified_by_hotel" | "failed";
-  identity_members: { id: string; name: string; relation: string; status: string; verification_id?: string | null }[];
-  identity_failure_reason?: string | null;
-  entry_code_expires_at?: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type ReservationIdentityStartResult = {
-  session_id: string;
-  status: "waiting_for_verification" | "partially_verified" | "fully_verified" | "verification_failed" | "not_required" | "pending_review" | "verified_by_hotel" | "failed";
-  identity_members: { id: string; name: string; relation: string; status: string; verification_id?: string | null }[];
-};
-
 export type Hotel = {
   id: string;
   hotel_name: string;
   city: string;
   address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  reservation_url?: string | null;
   active: boolean;
   manager_id?: string | null;
   services?: HotelServices;
+  logo_url?: string | null;
+  intro_video_url?: string | null;
+  intro_video_duration?: number | null;
   created_at: string;
 };
 
 export type HotelInfoKnowledge = {
   hotel_name?: string | null;
   description?: string | null;
+  general_information?: string | null;
   address?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -155,32 +204,45 @@ export type HotelInfoKnowledge = {
   star_rating?: string | null;
   check_in_time?: string | null;
   check_out_time?: string | null;
+  emergency_information?: string | null;
 };
 
 export type HotelServicesKnowledge = {
   wifi?: string | null;
   parking?: string | null;
   swimming_pool?: string | null;
+  pool_rules?: string | null;
   spa?: string | null;
   sauna?: string | null;
   gym?: string | null;
   laundry?: string | null;
   airport_transfer?: string | null;
   room_service?: string | null;
+  valet?: string | null;
+  housekeeping?: string | null;
+  vip_services?: string | null;
   pet_policy?: string | null;
 };
 
 export type RestaurantKnowledge = {
+  restaurant_hours?: string | null;
   breakfast_hours?: string | null;
+  breakfast_content?: string | null;
   lunch_hours?: string | null;
   dinner_hours?: string | null;
   restaurant_menu?: string | null;
+  bar_menu?: string | null;
   room_service_hours?: string | null;
+  room_service_fees?: string | null;
+  room_service_rules?: string | null;
 };
 
 export type RoomKnowledge = {
   room_types?: string | null;
   room_features?: string | null;
+  room_rules?: string | null;
+  extra_bed_rules?: string | null;
+  baby_bed_rules?: string | null;
   balcony?: string | null;
   sea_view?: string | null;
   air_conditioning?: string | null;
@@ -193,10 +255,15 @@ export type RoomKnowledge = {
 export type PolicyKnowledge = {
   smoking_policy?: string | null;
   cancellation_policy?: string | null;
+  refund_policy?: string | null;
   child_policy?: string | null;
   early_check_in?: string | null;
   late_check_out?: string | null;
   pet_rules?: string | null;
+  payment_methods?: string | null;
+  deposit_rules?: string | null;
+  guest_request_rules?: string | null;
+  special_rules?: string | null;
 };
 
 export type NearbyPlace = { id?: string | null; name: string; category: string; description: string; distance: string };
@@ -244,7 +311,6 @@ export type Room = {
   is_active: boolean;
   description?: string | null;
   current_guest_name?: string | null;
-  active_reservation_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -261,14 +327,26 @@ export type RoomInput = {
   description?: string | null;
 };
 
-export type RoomPrice = {
-  room_id: string;
-  room_number: string;
-  room_name?: string | null;
-  room_type: RoomType;
-  price_per_night: number;
-  total_nights: number;
-  total_price: number;
+export type ReservationReferral = {
+  id: string;
+  hotel_id: string;
+  hotel_name: string;
+  guest_id: string;
+  check_in_date: string;
+  check_out_date: string;
+  guest_count: number;
+  room_type: string;
+  status: "pending_request";
+  redirect_url: string;
+  created_at: string;
+};
+
+export type ReservationReferralInput = {
+  hotel_id?: string;
+  check_in_date: string;
+  check_out_date: string;
+  guest_count: number;
+  room_type: string;
 };
 
 export type Announcement = {
@@ -284,143 +362,28 @@ export type ChatResp = {
   request_id?: string | null; parsed?: Record<string, any> | null;
 };
 
-export type IdentitySubjectType = "guest" | "employee";
-export type IdentityDocumentType = "id_front" | "id_back" | "passport" | "selfie" | "other";
-export type IdentityStatus =
-  | "unverified" | "pending" | "verified" | "rejected" | "expired"
-  | "application_received" | "identity_required" | "in_review" | "approved" | "active_employee"
-  | "not_started" | "pending_review" | "verified_by_hotel" | "needs_review" | "needs_new_documents" | "suspicious";
-export type FraudRisk = "low" | "medium" | "high" | "unknown";
-export type AnalysisStatus = "pending" | "completed" | "unavailable" | "failed";
-
-export type IdentityDocument = {
-  id: string;
-  verification_id: string;
-  document_type: IdentityDocumentType;
-  file_name: string;
-  mime_type: string;
-  size: number;
-  checksum: string;
-  perceptual_hash?: string | null;
-  quality?: Record<string, any>;
-  uploaded_by: string;
-  created_at: string;
-};
-
-export type OcrResult = {
-  id: string;
-  verification_id: string;
-  status: AnalysisStatus;
-  extracted: Record<string, any>;
-  mismatches: string[];
-  confidence: number;
-  provider: string;
-  created_at: string;
-};
-
-export type FaceComparisonResult = {
-  id: string;
-  verification_id: string;
-  status: AnalysisStatus;
-  face_present: boolean;
-  document_face_present: boolean;
-  similarity_score: number;
-  liveness_score: number;
-  completed_actions: string[];
-  provider: string;
-  created_at: string;
-};
-
-export type FraudAnalysis = {
-  id: string;
-  verification_id: string;
-  status: AnalysisStatus;
-  fraud_risk: FraudRisk;
-  confidence_score: number;
-  signals: string[];
-  duplicate_hits: string[];
-  recommended_status: IdentityStatus;
-  provider: string;
-  created_at: string;
-};
-
-export type LivenessChallenge = {
-  id: string;
-  actions: string[];
-  expires_at: string;
-};
-
-export type VerificationHistory = {
-  id: string;
-  verification_id: string;
-  from_status?: string | null;
-  to_status: string;
-  note?: string | null;
-  actor_id: string;
-  actor_role: string;
-  created_at: string;
-};
-
-export type IdentityVerification = {
-  id: string;
-  user_id: string;
-  user_name?: string | null;
-  user_email?: string | null;
+export type HotelMapConfig = {
   hotel_id: string;
-  hotelId: string;
-  role: Role;
-  subject_type: IdentitySubjectType;
-  status: IdentityStatus;
-  first_name?: string | null;
-  last_name?: string | null;
-  birth_date?: string | null;
-  nationality?: string | null;
-  document_type?: string | null;
-  masked_document_number?: string | null;
-  document_expiry_date?: string | null;
-  employee_role?: string | null;
-  employment_start_date?: string | null;
-  manager_approved?: boolean | null;
-  internal_notes?: string | null;
-  documents: IdentityDocument[];
-  latest_ocr?: OcrResult | null;
-  latest_face?: FaceComparisonResult | null;
-  latest_fraud?: FraudAnalysis | null;
-  confidence_score?: number | null;
-  fraud_risk?: FraudRisk | null;
-  created_by: string;
-  updated_by?: string | null;
-  created_at: string;
-  updated_at: string;
+  hotel_name: string;
+  address?: string | null;
+  latitude: number;
+  longitude: number;
 };
 
-export type IdentityProfileInput = {
-  first_name: string;
-  last_name: string;
-  birth_date: string;
-  nationality: string;
-  document_type: string;
-  document_number: string;
-  document_expiry_date?: string | null;
-  employee_role?: string | null;
-  employment_start_date?: string | null;
-  manager_approved?: boolean | null;
-  internal_notes?: string | null;
+export type GeocodeResult = {
+  display_name: string;
+  latitude: number;
+  longitude: number;
 };
 
-export type IdentityDocumentUpload = {
-  document_type: IdentityDocumentType;
-  file_name: string;
-  mime_type: string;
-  data_uri: string;
+export type ReceptionChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
-export type IdentitySelfieUpload = {
-  file_name?: string;
-  mime_type?: string;
-  data_uri: string;
-  completed_actions: string[];
-  challenge_id?: string | null;
+export type ReceptionChatResp = {
+  reply: string;
+  model: string;
 };
 
 export const api = {
@@ -432,36 +395,22 @@ export const api = {
   me: () => request<User>("/auth/me"),
   chat: (message: string, session_id?: string) =>
     request<ChatResp>("/chat", { method: "POST", body: JSON.stringify({ message, session_id }) }),
+  receptionChat: (message: string, history: ReceptionChatMessage[] = []) =>
+    request<ReceptionChatResp>("/reception-ai/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, history }),
+    }),
   myRequests: () => request<RequestItem[]>("/requests/me"),
-  myReservations: () => request<Reservation[]>("/reservations/me"),
   myRoom: () => request<Room | null>("/rooms/me"),
   myHotelServices: () => request<{ hotel_id: string; services: HotelServices; labels: Record<string, string> }>("/hotel/services"),
+  hotelMapConfig: () => request<HotelMapConfig>("/hotel/map-config"),
+  nearbyPlaces: (latitude: number, longitude: number, type: DiscoverPlaceType) =>
+    request<MapNearbyPlace[]>(
+      `/hotel/nearby-places?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}&type=${encodeURIComponent(type)}`,
+    ),
+  geocodeAddress: (query: string) =>
+    request<GeocodeResult[]>(`/geocode?query=${encodeURIComponent(query)}`),
   announcements: () => request<Announcement[]>("/announcements"),
-  startIdentity: (b: { user_id?: string; subject_type?: IdentitySubjectType } = {}) =>
-    request<IdentityVerification>("/identity/start", { method: "POST", body: JSON.stringify(b) }),
-  myIdentity: () => request<IdentityVerification>("/identity/me"),
-  saveMyIdentity: (b: IdentityProfileInput) =>
-    request<IdentityVerification>("/identity/me", { method: "PUT", body: JSON.stringify(b) }),
-  uploadIdentityDocument: (verificationId: string, b: IdentityDocumentUpload) =>
-    request<IdentityDocument>(`/identity/${verificationId}/documents`, { method: "POST", body: JSON.stringify(b) }),
-  livenessChallenge: () => request<LivenessChallenge>("/identity/liveness-challenge"),
-  uploadIdentitySelfie: (verificationId: string, b: IdentitySelfieUpload) =>
-    request<FaceComparisonResult>(`/identity/${verificationId}/selfie`, { method: "POST", body: JSON.stringify(b) }),
-  runIdentityOcr: (verificationId: string) =>
-    request<OcrResult>(`/identity/${verificationId}/run-ocr`, { method: "POST" }),
-  runIdentityFaceComparison: (verificationId: string) =>
-    request<FaceComparisonResult>(`/identity/${verificationId}/run-face-comparison`, { method: "POST" }),
-  runIdentityFraudAnalysis: (verificationId: string) =>
-    request<FraudAnalysis>(`/identity/${verificationId}/run-fraud-analysis`, { method: "POST" }),
-  identityHistory: (verificationId: string) => request<VerificationHistory[]>(`/identity/${verificationId}/history`),
-  approveIdentity: (verificationId: string, note?: string) =>
-    request<IdentityVerification>(`/identity/${verificationId}/approve`, { method: "POST", body: JSON.stringify({ note: note || null }) }),
-  rejectIdentity: (verificationId: string, note?: string) =>
-    request<IdentityVerification>(`/identity/${verificationId}/reject`, { method: "POST", body: JSON.stringify({ note: note || null }) }),
-  requestIdentityDocuments: (verificationId: string, note?: string) =>
-    request<IdentityVerification>(`/identity/${verificationId}/request-documents`, { method: "POST", body: JSON.stringify({ note: note || null }) }),
-  activateEmployeeIdentity: (verificationId: string, note?: string) =>
-    request<IdentityVerification>(`/identity/${verificationId}/activate-employee`, { method: "POST", body: JSON.stringify({ note: note || null }) }),
   deptQueue: () => request<RequestItem[]>("/requests/department"),
   activeJobs: () => request<RequestItem[]>("/requests/active"),
   staffRooms: () => request<Room[]>("/staff/rooms"),
@@ -481,37 +430,11 @@ export const api = {
   }>("/admin/stats"),
   departments: () => request<{ code: string; name: string }[]>("/meta/departments"),
 
-  // Public reservation (no auth required)
-  availableRooms: (b: { check_in_date: string; check_out_date: string; capacity: number }) =>
-    request<Room[]>(`/rooms/available?check_in_date=${encodeURIComponent(b.check_in_date)}&check_out_date=${encodeURIComponent(b.check_out_date)}&capacity=${encodeURIComponent(String(b.capacity))}`),
-  roomPrice: (roomId: string, b: { check_in_date: string; check_out_date: string }) =>
-    request<RoomPrice>(`/rooms/${encodeURIComponent(roomId)}/price?check_in_date=${encodeURIComponent(b.check_in_date)}&check_out_date=${encodeURIComponent(b.check_out_date)}`),
-  startReservationIdentity: (b: { customer_name: string; customer_email: string; capacity: number; identity_members: { name: string; relation: string }[] }) =>
-    request<ReservationIdentityStartResult>("/reservations/identity/start", { method: "POST", body: JSON.stringify(b) }),
-  createReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; check_in_date: string; check_out_date: string; capacity?: number; room_id?: string; room_number?: string; payment_status?: PaymentStatus; guest_type?: GuestType; identity_verification_requested?: boolean; identity_members?: { name: string; relation: string }[]; identity_session_id?: string }) =>
-    request<Reservation>("/reservations", { method: "POST", body: JSON.stringify(b) }),
   checkin: (b: { email: string; access_code: string; new_password: string }) =>
     request<AuthOut>("/checkin", { method: "POST", body: JSON.stringify(b) }),
 
-  // Admin reservations
-  listReservations: () => request<Reservation[]>("/admin/reservations"),
-  adminCreateReservation: (b: { customer_name: string; customer_email: string; customer_phone: string; check_in_date: string; check_out_date: string; capacity?: number; room_id?: string; room_number?: string; payment_status?: PaymentStatus; guest_type?: GuestType; identity_verification_requested?: boolean; identity_members?: { name: string; relation: string }[] }) =>
-    request<Reservation>("/admin/reservations", { method: "POST", body: JSON.stringify(b) }),
-  assignRoom: (id: string, room_number: string, room_id?: string) =>
-    request<Reservation>(`/admin/reservations/${id}/assign-room`, { method: "POST", body: JSON.stringify({ room_number, room_id }) }),
-  updateReservation: (id: string, b: Partial<Pick<Reservation, "customer_name" | "customer_phone" | "check_in_date" | "check_out_date" | "capacity" | "room_id" | "room_number" | "status" | "payment_status" | "guest_type">>) =>
-    request<Reservation>(`/admin/reservations/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
-  approveCheckin: (id: string) => request<Reservation>(`/admin/reservations/${id}/checkin`, { method: "POST" }),
-  approveReservationIdentity: (id: string) => request<Reservation>(`/admin/reservations/${id}/identity/approve`, { method: "POST" }),
-  rejectReservationIdentity: (id: string, note?: string) =>
-    request<Reservation>(`/admin/reservations/${id}/identity/reject`, { method: "POST", body: JSON.stringify({ note: note || null }) }),
-  completeReservation: (id: string) => request<Reservation>(`/admin/reservations/${id}/complete`, { method: "POST" }),
-  cancelReservation: (id: string) => request<Reservation>(`/admin/reservations/${id}/cancel`, { method: "POST" }),
-
   // Admin rooms
   listRooms: () => request<Room[]>("/admin/rooms"),
-  adminAvailableRooms: (b: { check_in_date: string; check_out_date: string; capacity: number }) =>
-    request<Room[]>(`/admin/rooms/available?check_in_date=${encodeURIComponent(b.check_in_date)}&check_out_date=${encodeURIComponent(b.check_out_date)}&capacity=${encodeURIComponent(String(b.capacity))}`),
   createRoom: (b: RoomInput) =>
     request<Room>("/admin/rooms", { method: "POST", body: JSON.stringify(b) }),
   updateRoom: (id: string, b: Partial<RoomInput>) =>
@@ -519,13 +442,39 @@ export const api = {
   roomStatus: (id: string) => request<Room>(`/admin/rooms/${id}/status`),
   deleteRoom: (id: string) => request<{ ok: boolean }>(`/admin/rooms/${id}`, { method: "DELETE" }),
 
+  // Simple reservation referrals
+  createReservationReferral: (body: ReservationReferralInput) =>
+    request<ReservationReferral>("/reservation-referrals", { method: "POST", body: JSON.stringify(body) }),
+  myReservationReferrals: () => request<ReservationReferral[]>("/reservation-referrals/me"),
+  managerReservationReferrals: () => request<ReservationReferral[]>("/manager/reservation-referrals"),
+  managerReservationReferralStats: () =>
+    request<{ total_referrals: number; by_room_type: Record<string, number> }>("/manager/reservation-referrals/stats"),
+
   // System admin
-  systemStats: () => request<{ hotels: number; active_hotels: number; managers: number; staff: number; guests: number; users: number; reservations: number; requests: number; ai_messages: number }>("/system/stats"),
+  systemStats: () => request<{ hotels: number; active_hotels: number; managers: number; staff: number; guests: number; users: number; requests: number; ai_messages: number }>("/system/stats"),
   listHotels: () => request<Hotel[]>("/system/hotels"),
-  createHotel: (b: { hotel_name: string; city: string; address?: string; active?: boolean }) =>
-    request<Hotel>("/system/hotels", { method: "POST", body: JSON.stringify(b) }),
-  updateHotel: (id: string, b: Partial<Pick<Hotel, "hotel_name" | "city" | "address" | "active" | "services">>) =>
+  createHotel: (b: { hotel_name: string; city: string; address?: string; latitude?: number; longitude?: number; reservation_url?: string; active?: boolean; logo: UploadAsset; intro_video?: UploadAsset | null }) => {
+    const form = new FormData();
+    form.append("hotel_name", b.hotel_name);
+    form.append("city", b.city);
+    if (b.address) form.append("address", b.address);
+    if (b.latitude != null) form.append("latitude", String(b.latitude));
+    if (b.longitude != null) form.append("longitude", String(b.longitude));
+    if (b.reservation_url) form.append("reservation_url", b.reservation_url);
+    form.append("active", String(b.active ?? true));
+    appendUpload(form, "logo", b.logo);
+    if (b.intro_video) appendUpload(form, "intro_video", b.intro_video);
+    return requestMultipart<Hotel>("/system/hotels", form);
+  },
+  updateHotel: (id: string, b: Partial<Pick<Hotel, "hotel_name" | "city" | "address" | "latitude" | "longitude" | "reservation_url" | "active" | "services">>) =>
     request<Hotel>(`/system/hotels/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  updateHotelBranding: (id: string, assetType: "logo" | "intro", asset: UploadAsset) => {
+    const form = new FormData();
+    appendUpload(form, "file", asset);
+    return requestMultipart<Hotel>(`/system/hotels/${id}/branding/${assetType}`, form, "PUT");
+  },
+  deleteHotelBranding: (id: string, assetType: "logo" | "intro") =>
+    request<Hotel>(`/system/hotels/${id}/branding/${assetType}`, { method: "DELETE" }),
   setHotelActive: (id: string, active: boolean) =>
     request<Hotel>(`/system/hotels/${id}/activate`, { method: "POST", body: JSON.stringify({ active }) }),
   deleteHotel: (id: string) => request<{ ok: boolean }>(`/system/hotels/${id}`, { method: "DELETE" }),
@@ -545,20 +494,46 @@ export const api = {
   savePlatformSettings: (b: Record<string, any>) =>
     request<Record<string, any>>("/system/settings", { method: "POST", body: JSON.stringify(b) }),
   listStaff: () => request<User[]>("/manager/staff"),
-  createStaff: (b: { email: string; password: string; name: string; department: string; gender: string; birth_date: string; nationality: string; country: string; region_city: string; start_identity_verification?: boolean }) =>
+  createStaff: (b: { email: string; password: string; name: string; department: string; position?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string }) =>
     request<User>("/manager/staff", { method: "POST", body: JSON.stringify(b) }),
-  updateStaff: (id: string, b: { name?: string; department?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string; active?: boolean }) =>
+  updateStaff: (id: string, b: { name?: string; department?: string; position?: string; gender?: string; birth_date?: string; nationality?: string; country?: string; region_city?: string; active?: boolean }) =>
     request<User>(`/manager/staff/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
   deleteStaff: (id: string) => request<{ ok: boolean }>(`/manager/staff/${id}`, { method: "DELETE" }),
+  planningStaff: (department?: string) =>
+    request<User[]>(`/planning/staff${department ? `?department=${encodeURIComponent(department)}` : ""}`),
+  listSchedules: (filters: { department?: string; from_date?: string; to_date?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]).toString();
+    return request<DepartmentSchedule[]>(`/planning${query ? `?${query}` : ""}`);
+  },
+  createSchedule: (b: DepartmentScheduleInput) =>
+    request<DepartmentSchedule>("/planning", { method: "POST", body: JSON.stringify(b) }),
+  updateSchedule: (id: string, b: Partial<DepartmentScheduleInput>) =>
+    request<DepartmentSchedule>(`/planning/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteSchedule: (id: string) => request<{ ok: boolean }>(`/planning/${id}`, { method: "DELETE" }),
+  approveSchedule: (id: string) =>
+    request<DepartmentSchedule>(`/planning/${id}/approve`, { method: "POST" }),
+  exportSchedules: (filters: { department?: string; from_date?: string; to_date?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]).toString();
+    return downloadFile(`/planning/export${query ? `?${query}` : ""}`, "departman-planlari.xlsx");
+  },
   listGuests: () => request<User[]>("/manager/guests"),
   createGuest: (b: { email: string; password: string; name: string; room_no?: string; guest_type?: GuestType }) =>
     request<User>("/manager/guests", { method: "POST", body: JSON.stringify(b) }),
   updateGuest: (id: string, b: { name?: string; room_no?: string; guest_type?: GuestType; active?: boolean }) =>
     request<User>(`/manager/guests/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
-  managerReports: () => request<{ reservations: number; open_requests: number; staff: number; rooms: number }>("/manager/reports"),
+  checkoutGuest: (id: string) =>
+    request<User>(`/manager/guests/${id}/checkout`, { method: "POST" }),
+  managerReports: () => request<{ open_requests: number; staff: number; rooms: number; guests: number }>("/manager/reports"),
   managerHotel: () => request<Hotel>("/manager/hotel"),
-  updateManagerHotel: (b: Partial<Pick<Hotel, "hotel_name" | "city" | "address" | "services">>) =>
+  updateManagerHotel: (b: Partial<Pick<Hotel, "hotel_name" | "city" | "address" | "latitude" | "longitude" | "services" | "reservation_url">>) =>
     request<Hotel>("/manager/hotel", { method: "PATCH", body: JSON.stringify(b) }),
+  updateManagerBranding: (assetType: "logo" | "intro", asset: UploadAsset) => {
+    const form = new FormData();
+    appendUpload(form, "file", asset);
+    return requestMultipart<Hotel>(`/manager/hotel/branding/${assetType}`, form, "PUT");
+  },
+  deleteManagerBranding: (assetType: "logo" | "intro") =>
+    request<Hotel>(`/manager/hotel/branding/${assetType}`, { method: "DELETE" }),
   managerAiKnowledge: () => request<HotelAiKnowledge>("/manager/ai-knowledge"),
   saveManagerAiKnowledge: (b: HotelAiKnowledgeInput) =>
     request<HotelAiKnowledge>("/manager/ai-knowledge", { method: "PUT", body: JSON.stringify(b) }),
@@ -566,10 +541,6 @@ export const api = {
   staffAiKnowledge: () => request<HotelAiKnowledge>("/staff/ai-knowledge"),
   systemAiKnowledge: (hotelId: string) =>
     request<HotelAiKnowledge>(`/system/ai-knowledge?hotel_id=${encodeURIComponent(hotelId)}`),
-  managerIdentity: () => request<IdentityVerification[]>("/manager/identity"),
-  managerIdentityAlerts: () => request<IdentityAlert[]>("/manager/identity-alerts"),
-  systemIdentity: (hotelId?: string) =>
-    request<IdentityVerification[]>(`/system/identity${hotelId ? `?hotel_id=${encodeURIComponent(hotelId)}` : ""}`),
   assignTask: (requestId: string, staff_id: string) =>
     request<RequestItem>(`/manager/requests/${requestId}/assign`, { method: "POST", body: JSON.stringify({ staff_id }) }),
   listAnnouncements: () => request<Announcement[]>("/manager/announcements"),
@@ -594,12 +565,4 @@ export async function transcribeAudio(uri: string): Promise<string> {
   }
   if (!res.ok) throw new Error(data?.detail || (typeof data === "string" ? data : null) || "Transkripsiyon başarısız");
   return data.text as string;
-}
-
-export async function fetchIdentityDocumentUri(verificationId: string, documentId: string): Promise<string> {
-  const headers: Record<string, string> = { ...(await authHeaders()) };
-  const res = await fetch(`${API}/identity/${encodeURIComponent(verificationId)}/documents/${encodeURIComponent(documentId)}`, { headers });
-  if (!res.ok) throw new Error("Belge görüntülenemedi");
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
 }

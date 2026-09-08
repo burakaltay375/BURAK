@@ -3,18 +3,16 @@ import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
   KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
-import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAudioRecorder, AudioModule, RecordingPresets } from "expo-audio";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/src/auth";
 import { api, transcribeAudio, ChatResp, type HotelServices } from "@/src/api";
+import { HospiraMark } from "@/src/components/HospiraBrand";
 import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, SERVICE_LABELS } from "@/src/theme";
 
 type Msg = { role: "user" | "assistant"; content: string; parsed?: any };
-
-const AI_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxhaSUyMGFzc2lzdGFudCUyMG1pbmltYWxpc3QlMjBhdmF0YXIlMjAzZHxlbnwwfHx8fDE3ODE4Njg2NTl8MA&ixlib=rb-4.1.0&q=85";
 
 const SUGGESTIONS = [
   { text: "Oda servisi: 2 espresso ve tost", service: "room_service" },
@@ -29,8 +27,8 @@ export default function GuestChat() {
     {
       role: "assistant",
       content: user?.role === "staff"
-        ? `Merhaba, ${user?.name?.split(" ")[0] ?? "ekip arkadaşım"}. Ben Astoria AI Asistan. Personel sohbetleri not ve yardım içindir; operasyon talebi sadece misafir sohbetinden oluşturulur.`
-        : `Hoş geldiniz, ${user?.name?.split(" ")[0] ?? "Misafirimiz"}. Ben Astoria AI Asistan. Mesajınızı yazabilir ya da mikrofona basılı tutarak söyleyebilirsiniz.`,
+        ? `Merhaba, ${user?.name?.split(" ")[0] ?? "ekip arkadaşım"}. Ben Hospira AI Asistan. Personel sohbetleri not ve yardım içindir; operasyon talebi sadece misafir sohbetinden oluşturulur.`
+        : `Hoş geldiniz, ${user?.name?.split(" ")[0] ?? "Misafirimiz"}. Ben Hospira AI Asistan. Mesajınızı yazabilir ya da mikrofona basılı tutarak söyleyebilirsiniz.`,
     },
   ]);
   const [input, setInput] = useState("");
@@ -105,9 +103,9 @@ export default function GuestChat() {
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="guest-chat-screen">
       <View style={s.header}>
-        <Image source={{ uri: AI_AVATAR }} style={s.avatar} contentFit="cover" />
+        <HospiraMark size={48} />
         <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>Astoria Konsiyerj</Text>
+          <Text style={s.headerTitle}>Hospira Konsiyerj</Text>
           <Text style={s.headerSub}>
             {user?.role === "staff"
               ? `Personel AI · ${DEPT_LABEL[user.department ?? ""] ?? "Departman"}`
@@ -190,7 +188,6 @@ export default function GuestChat() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.surface },
   header: { flexDirection: "row", alignItems: "center", gap: SPACING.md, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: COLORS.surfaceSecondary },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: COLORS.surfaceTertiary },
   headerTitle: { color: COLORS.onSurface, fontSize: 16, fontWeight: "700", fontFamily: TYPE.display },
   headerSub: { color: COLORS.onSurfaceTertiary, fontSize: 12, marginTop: 2 },
   servicesRow: { backgroundColor: COLORS.surfaceSecondary, borderBottomWidth: 1, borderBottomColor: COLORS.border, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm, gap: SPACING.xs },

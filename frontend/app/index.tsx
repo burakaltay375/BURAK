@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/src/auth";
+import HospiraBrand from "@/src/components/HospiraBrand";
 import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS } from "@/src/theme";
 
@@ -17,11 +18,12 @@ export default function Index() {
 
   return (
     <View style={s.c} testID="splash-screen">
+      <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
       <ActivityIndicator color={COLORS.brand} size="large" />
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  c: { flex: 1, backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center" },
+  c: { flex: 1, backgroundColor: COLORS.surface, alignItems: "center", justifyContent: "center", gap: 20 },
 });
