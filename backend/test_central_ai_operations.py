@@ -262,6 +262,9 @@ class CentralAiOperationsTest(unittest.TestCase):
         guest_task = next(item for item in guest_tasks if item["id"] == latest_housekeeping_id)
         self.assertNotIn("issue_status", guest_task)
         self.assertNotIn("operational_note", guest_task)
+        self.assertNotIn("assigned_staff_id", guest_task)
+        self.assertNotIn("assigned_staff_name", guest_task)
+        self.assertNotIn("proof_photo", guest_task)
 
     def test_guest_cannot_create_for_another_room(self) -> None:
         status_code, _ = self.request(

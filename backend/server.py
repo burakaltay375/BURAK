@@ -324,6 +324,20 @@ class RequestOut(BaseModel):
     created_at: str
     updated_at: str
 
+class GuestRequestOut(BaseModel):
+    id: str
+    room_no: str
+    departman: str
+    service_key: Optional[str] = None
+    hizmet_turu: str
+    zaman: str
+    detay: str
+    oncelik: Literal["DUSUK", "ORTA", "YUKSEK"]
+    status: Literal["ALINDI", "PERSONEL_GIDIYOR", "TAMAMLANDI", "REDDEDILDI"]
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
 class ManagerRequestOut(RequestOut):
     operational_note: Optional[str] = None
     completed_via: Optional[str] = None
@@ -1078,6 +1092,22 @@ def public_request(r: dict, include_internal: bool = False) -> RequestOut:
             issue_status=r.get("issue_status"),
         )
     return model(**payload)
+
+def guest_public_request(r: dict) -> GuestRequestOut:
+    return GuestRequestOut(
+        id=r["id"],
+        room_no=r["room_no"],
+        departman=r["departman"],
+        service_key=r.get("service_key"),
+        hizmet_turu=r["hizmet_turu"],
+        zaman=r["zaman"],
+        detay=r["detay"],
+        oncelik=r["oncelik"],
+        status=r["status"],
+        completed_at=r.get("completed_at"),
+        created_at=r["created_at"],
+        updated_at=r["updated_at"],
+    )
 
 def public_hotel(h: dict) -> "HotelOut":
     branding = h.get("branding") if isinstance(h.get("branding"), dict) else {}
@@ -3387,14 +3417,14 @@ async def voice_transcribe(file: UploadFile = File(...), u: dict = Depends(get_c
 # --------------------------------------------------------------------------
 # Requests (CRUD + lifecycle)
 # --------------------------------------------------------------------------
-@api.get("/requests/me", response_model=List[RequestOut])
+@api.get("/requests/me", response_model=List[GuestRequestOut])
 async def my_requests(u: dict = Depends(get_current_user)):
     if role_of(u) != "guest":
         raise HTTPException(403, "Sadece misafirler")
     docs = await db.requests.find(
         with_hotel_scope(u, {"guest_id": u["id"]}), {"_id": 0}
     ).sort("created_at", -1).to_list(200)
-    return [public_request(d) for d in docs]
+    return [guest_public_request(d) for d in docs]
 
 @api.get("/requests/department", response_model=List[RequestOut])
 async def department_queue(u: dict = Depends(get_current_user)):
