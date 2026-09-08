@@ -2,16 +2,10 @@
 
 import os
 import json
-import subprocess
-import sys
-import time
 import unittest
 import urllib.error
 import urllib.request
 import uuid
-
-os.environ["DB_NAME"] = f"hotel_ops_central_ai_test_{uuid.uuid4().hex}"
-os.environ["EMERGENT_LLM_KEY"] = ""
 
 from pymongo import MongoClient
 
@@ -21,14 +15,18 @@ import server
 class CentralAiOperationsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.base_url = "http://127.0.0.1:18191"
+        cls.base_url = "http://127.0.0.1:18080"
         cls.mongo = MongoClient(server.MONGO_URL)
         cls.database = cls.mongo[server.DB_NAME]
-        cls.hotel_id = "test-central-operations"
-        cls.guest_id = "guest-room-200"
-        cls.other_guest_id = "guest-room-2400"
-        cls.staff_id = "staff-west-200"
-        cls.out_of_scope_staff_id = "staff-west-2300"
+        urllib.request.urlopen(f"{cls.base_url}/api/hotels/active", timeout=5).read()
+        suffix = uuid.uuid4().hex
+        cls.hotel_id = f"test-central-operations-{suffix}"
+        cls.guest_id = f"guest-room-200-{suffix}"
+        cls.other_guest_id = f"guest-room-2400-{suffix}"
+        cls.staff_id = f"staff-west-200-{suffix}"
+        cls.out_of_scope_staff_id = f"staff-west-2300-{suffix}"
+        cls.room_200_id = f"room-200-{suffix}"
+        cls.room_2400_id = f"room-2400-{suffix}"
         scope = {"hotel_id": cls.hotel_id, "hotelId": cls.hotel_id}
         cls.database.hotels.insert_one({
             "id": cls.hotel_id,
@@ -68,47 +66,32 @@ class CentralAiOperationsTest(unittest.TestCase):
         ])
         cls.database.rooms.insert_many([
             {
-                "id": "room-200", "room_number": "200", "room_type": "Standard",
+                "id": cls.room_200_id, "room_number": "200", "room_type": "Standard",
                 "type": "Standard", "floor": "West Block", "capacity": 2,
                 "price_per_night": 100, "operational_status": "normal",
                 "status": "occupied", "is_active": True,
                 "created_at": server.now_iso(), "updated_at": server.now_iso(), **scope,
             },
             {
-                "id": "room-2400", "room_number": "2400", "room_type": "Standard",
+                "id": cls.room_2400_id, "room_number": "2400", "room_type": "Standard",
                 "type": "Standard", "floor": "West Block", "capacity": 2,
                 "price_per_night": 100, "operational_status": "normal",
                 "status": "occupied", "is_active": True,
                 "created_at": server.now_iso(), "updated_at": server.now_iso(), **scope,
             },
         ])
-        cls.server_process = subprocess.Popen(
-            [
-                sys.executable, "-m", "uvicorn", "server:app",
-                "--host", "127.0.0.1", "--port", "18191",
-            ],
-            cwd=os.path.dirname(__file__),
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        for _ in range(200):
-            try:
-                urllib.request.urlopen(f"{cls.base_url}/api/hotels/active", timeout=1).read()
-                break
-            except (urllib.error.URLError, TimeoutError):
-                time.sleep(0.1)
-        else:
-            cls.server_process.terminate()
-            output, _ = cls.server_process.communicate(timeout=10)
-            raise RuntimeError(f"Test Uvicorn server could not start:\n{output}")
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.server_process.terminate()
-        cls.server_process.wait(timeout=10)
-        cls.mongo.drop_database(server.DB_NAME)
+        hotel_scope = {
+            "$or": [{"hotel_id": cls.hotel_id}, {"hotelId": cls.hotel_id}],
+        }
+        cls.database.chat_messages.delete_many({
+            "user_id": {"$in": [cls.guest_id, cls.other_guest_id, cls.staff_id]},
+        })
+        for collection in ("staff_schedules", "requests", "rooms", "users"):
+            cls.database[collection].delete_many(hotel_scope)
+        cls.database.hotels.delete_many({"id": cls.hotel_id})
         cls.mongo.close()
 
     def auth(self, user_id: str) -> dict[str, str]:
@@ -175,7 +158,7 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertEqual(task["completed_via"], "staff_ai")
         self.assertEqual(task["operational_note"], "havlu eksikti")
         self.assertEqual(
-            self.database.rooms.find_one({"id": "room-200"})["operational_status"],
+            self.database.rooms.find_one({"id": self.room_200_id})["operational_status"],
             "normal",
         )
 
