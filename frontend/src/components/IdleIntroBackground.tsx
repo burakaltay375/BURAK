@@ -8,6 +8,8 @@ import { resolveApiUrl, type Hotel } from "@/src/api";
 import { COLORS } from "@/src/theme";
 
 const DEFAULT_IDLE_DELAY_MS = 7_000;
+const POINTER_MOVE_THRESHOLD_PX = 6;
+const GLOBAL_IDLE_VIDEO = require("../../assets/videos/idle-intro.mp4");
 const IDLE_DELAY_MS = Math.max(
   Number(process.env.EXPO_PUBLIC_INTRO_IDLE_MS) || DEFAULT_IDLE_DELAY_MS,
   1_000,
@@ -21,8 +23,16 @@ type Props = {
 
 export default function IdleIntroBackground({ children, hotel, background }: Props) {
   const [isIdle, setIsIdle] = useState(false);
+  const [failedHotelIntroKey, setFailedHotelIntroKey] = useState<string | null>(null);
+  const [globalIntroFailed, setGlobalIntroFailed] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const introUrl = resolveApiUrl(hotel?.intro_video_url);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const hotelIntroUrl = resolveApiUrl(hotel?.intro_video_url);
+  const hotelIntroKey = `${hotel?.id ?? "hotel"}:${hotelIntroUrl ?? "none"}`;
+  const useGlobalIntro = !hotelIntroUrl || failedHotelIntroKey === hotelIntroKey;
+  const introSource = useGlobalIntro ? GLOBAL_IDLE_VIDEO : hotelIntroUrl;
+  const introSourceKey = useGlobalIntro ? "global" : hotelIntroKey;
+  const introAvailable = !globalIntroFailed;
 
   const player = useVideoPlayer(null, (instance) => {
     instance.loop = true;
@@ -43,19 +53,38 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
   const resetIdleTimer = useCallback(() => {
     clearIdleTimer();
     stopIntro();
-    timerRef.current = setTimeout(() => setIsIdle(Boolean(introUrl)), IDLE_DELAY_MS);
-  }, [clearIdleTimer, introUrl, stopIntro]);
+    timerRef.current = setTimeout(() => setIsIdle(introAvailable), IDLE_DELAY_MS);
+  }, [clearIdleTimer, introAvailable, stopIntro]);
 
   useEffect(() => {
     player.pause();
     player.currentTime = 0;
-    player.replace(introUrl);
+    player.replace(introSource);
     resetIdleTimer();
     return clearIdleTimer;
-  }, [clearIdleTimer, introUrl, player, resetIdleTimer]);
+  }, [clearIdleTimer, introSource, player, resetIdleTimer]);
 
   useEffect(() => {
-    if (!isIdle || !introUrl) {
+    setIsIdle(false);
+    setGlobalIntroFailed(false);
+    lastPointerRef.current = null;
+  }, [hotel?.id, hotelIntroUrl]);
+
+  useEffect(() => {
+    const subscription = player.addListener("statusChange", ({ status }) => {
+      if (status !== "error") return;
+      if (!useGlobalIntro && hotelIntroUrl) {
+        setFailedHotelIntroKey(hotelIntroKey);
+      } else {
+        setGlobalIntroFailed(true);
+        stopIntro();
+      }
+    });
+    return () => subscription.remove();
+  }, [hotelIntroKey, hotelIntroUrl, player, stopIntro, useGlobalIntro]);
+
+  useEffect(() => {
+    if (!isIdle || !introAvailable) {
       player.pause();
       return;
     }
@@ -63,23 +92,37 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
     player.muted = true;
     player.loop = true;
     player.play();
-  }, [introUrl, isIdle, player]);
+  }, [introAvailable, introSource, isIdle, player]);
+
+  const handleMouseMove = useCallback((event: MouseEvent) => {
+    const previous = lastPointerRef.current;
+    if (
+      previous &&
+      Math.hypot(event.clientX - previous.x, event.clientY - previous.y) < POINTER_MOVE_THRESHOLD_PX
+    ) {
+      return;
+    }
+    lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    resetIdleTimer();
+  }, [resetIdleTimer]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
-    const events = ["mousemove", "mousedown", "click", "touchstart", "keydown", "wheel"] as const;
+    const events = ["mousedown", "click", "touchstart", "keydown", "wheel"] as const;
+    document.addEventListener("mousemove", handleMouseMove, { passive: true, capture: true });
     events.forEach((event) => document.addEventListener(event, resetIdleTimer, { passive: true, capture: true }));
     return () => {
+      document.removeEventListener("mousemove", handleMouseMove, { capture: true });
       events.forEach((event) => document.removeEventListener(event, resetIdleTimer, { capture: true }));
     };
-  }, [resetIdleTimer]);
+  }, [handleMouseMove, resetIdleTimer]);
 
   return (
     <View style={styles.root} testID="idle-intro-shell" onTouchStart={resetIdleTimer}>
       <View pointerEvents="none" style={styles.baseBackground}>
         {background}
       </View>
-      {isIdle && introUrl && (
+      {isIdle && introAvailable && (
         <View
           pointerEvents="none"
           style={styles.mediaLayer}
@@ -88,7 +131,7 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
           importantForAccessibility="no-hide-descendants"
         >
           <VideoView
-            key={`${hotel?.id ?? "hotel"}:${introUrl}`}
+            key={`${hotel?.id ?? "hotel"}:${introSourceKey}`}
             player={player}
             style={styles.video}
             nativeControls={false}
