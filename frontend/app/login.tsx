@@ -9,7 +9,7 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { api, resolveApiUrl, type Hotel } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import HospiraBrand from "@/src/components/HospiraBrand";
+import HospiraBrand, { HospiraMark } from "@/src/components/HospiraBrand";
 import IdleIntroBackground from "@/src/components/IdleIntroBackground";
 import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
@@ -31,13 +31,8 @@ export default function Login() {
   const [hotelsLoading, setHotelsLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
+  const [failedLogoIds, setFailedLogoIds] = useState<Record<string, boolean>>({});
   const selectedHotel = hotels.find((hotel) => hotel.id === selectedHotelId);
-  const selectedLogoUrl = resolveApiUrl(selectedHotel?.logo_url);
-
-  useEffect(() => {
-    setFailedLogoUrl(null);
-  }, [selectedLogoUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -98,19 +93,7 @@ export default function Login() {
       <KeyboardAvoidingView style={s.kav} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
           <View style={s.header}>
-            {selectedLogoUrl && failedLogoUrl !== selectedLogoUrl ? (
-              <Image
-                source={{ uri: selectedLogoUrl }}
-                style={s.hotelLogo}
-                contentFit="contain"
-                contentPosition="left center"
-                testID={`login-hotel-logo-${selectedHotel?.id}`}
-                accessibilityLabel={`${selectedHotel?.hotel_name ?? "Otel"} logosu`}
-                onError={() => setFailedLogoUrl(selectedLogoUrl)}
-              />
-            ) : (
-              <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
-            )}
+            <HospiraBrand subtitle="Akıllı Operasyon Merkezi" />
           </View>
 
           <View style={s.form}>
@@ -129,6 +112,7 @@ export default function Login() {
                 <View style={s.hotelsRow}>
                   {hotels.map((hotel) => {
                     const selected = selectedHotelId === hotel.id;
+                    const logoUrl = resolveApiUrl(hotel.logo_url);
                     return (
                       <Pressable
                         key={hotel.id}
@@ -136,12 +120,26 @@ export default function Login() {
                         onPress={() => setSelectedHotelId(hotel.id)}
                         style={[s.hotelChip, selected && s.hotelChipSelected]}
                       >
-                        <Text style={[s.hotelChipText, selected && s.hotelChipTextSelected]}>
-                          {hotel.hotel_name}
-                        </Text>
-                        <Text style={[s.hotelCityText, selected && s.hotelChipTextSelected]}>
-                          {hotel.city}
-                        </Text>
+                        {logoUrl && !failedLogoIds[hotel.id] ? (
+                          <Image
+                            source={{ uri: logoUrl }}
+                            style={s.hotelChipLogo}
+                            contentFit="contain"
+                            testID={`login-hotel-logo-${hotel.id}`}
+                            accessibilityLabel={`${hotel.hotel_name} logosu`}
+                            onError={() => setFailedLogoIds((current) => ({ ...current, [hotel.id]: true }))}
+                          />
+                        ) : (
+                          <HospiraMark size={34} />
+                        )}
+                        <View style={s.hotelChipCopy}>
+                          <Text style={[s.hotelChipText, selected && s.hotelChipTextSelected]}>
+                            {hotel.hotel_name}
+                          </Text>
+                          <Text style={[s.hotelCityText, selected && s.hotelChipTextSelected]}>
+                            {hotel.city}
+                          </Text>
+                        </View>
                       </Pressable>
                     );
                   })}
@@ -198,7 +196,6 @@ const s = StyleSheet.create({
   kav: { flex: 1 },
   scroll: { flexGrow: 1, justifyContent: "flex-end", padding: SPACING.xl, paddingBottom: SPACING.xl2 },
   header: { marginBottom: SPACING.xl2 },
-  hotelLogo: { width: 220, maxWidth: "80%", height: 72 },
   form: { gap: SPACING.md },
   title: { fontSize: 28, color: COLORS.onSurface, fontFamily: TYPE.display, fontWeight: "700" },
   subtitle: { fontSize: 14, color: COLORS.onSurfaceSecondary, marginBottom: SPACING.md },
@@ -213,8 +210,12 @@ const s = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
     minWidth: 120,
-    gap: 2,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
   },
+  hotelChipLogo: { width: 34, height: 34, borderRadius: RADIUS.sm },
+  hotelChipCopy: { gap: 2 },
   hotelChipSelected: {
     borderColor: COLORS.brand,
     backgroundColor: COLORS.surfaceTertiary,
