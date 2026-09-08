@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { BlurView } from "expo-blur";
-import { usePathname } from "expo-router";
+import { useSegments } from "expo-router";
 import { useVideoPlayer, VideoView } from "expo-video";
 
 import { api, resolveApiUrl, type Hotel } from "@/src/api";
@@ -22,14 +22,14 @@ type Props = {
 
 export default function IdleIntroBackground({ children, homePath }: Props) {
   const { user } = useAuth();
-  const pathname = usePathname();
+  const segments = useSegments();
   const [hotel, setHotel] = useState<Hotel | null>(null);
   const [showIntro, setShowIntro] = useState(false);
   const showIntroRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playedSinceInteractionRef = useRef(false);
-  const normalizedPath = pathname.replace(/^\/operasyon(?=\/|$)/, "") || "/";
-  const isHome = normalizedPath === homePath;
+  const currentScreen = segments[segments.length - 1];
+  const isHome = currentScreen === homePath.replace(/^\//, "");
   const hotelId = user?.hotel_id || user?.hotelId || null;
   const introUrl = resolveApiUrl(hotel?.intro_video_url);
 
@@ -124,7 +124,10 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
-    const events = ["mousemove", "mousedown", "click", "touchstart", "pointerdown", "scroll", "keydown", "wheel"] as const;
+    // `scroll` can fire after layout/data refreshes without user input. Wheel,
+    // touch and pointer events still cover real scrolling without allowing the
+    // dashboard's periodic refresh to keep resetting the idle timer.
+    const events = ["mousemove", "mousedown", "click", "touchstart", "touchmove", "pointerdown", "keydown", "wheel"] as const;
     events.forEach((event) => document.addEventListener(event, handleInteraction, { passive: true, capture: true }));
     return () => {
       events.forEach((event) => document.removeEventListener(event, handleInteraction, { capture: true }));
