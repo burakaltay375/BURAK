@@ -1,0 +1,184 @@
+{
+  "app_name": "Resepsiyon Ai\u0131ll\u0131 Operasyon Merkezi",
+  "personality": "6 Glass / Luxe",
+  "personality_one_liner": "A cinematic, highly premium concierge and operations experience that feels like a five-star hotel, relying on deep slate, antique gold, and frosted glass.",
+  "color": {
+    "surface": "#0F0F11",
+    "onSurface": "#F5F5F5",
+    "surfaceSecondary": "#1A1A1D",
+    "onSurfaceSecondary": "#D1D1D1",
+    "surfaceTertiary": "#26262A",
+    "onSurfaceTertiary": "#A3A3A3",
+    "surfaceInverse": "#FAFAFA",
+    "onSurfaceInverse": "#0F0F11",
+    "brand": "#D4AF37",
+    "brandPrimary": "#D4AF37",
+    "onBrandPrimary": "#0F0F11",
+    "brandSecondary": "#C5A028",
+    "onBrandSecondary": "#0F0F11",
+    "brandTertiary": "#3A3320",
+    "onBrandTertiary": "#F2E3B6",
+    "success": "#4CAF50",
+    "onSuccess": "#0F0F11",
+    "warning": "#FF9800",
+    "onWarning": "#0F0F11",
+    "error": "#E53935",
+    "onError": "#FFFFFF",
+    "info": "#9E9E9E",
+    "onInfo": "#0F0F11",
+    "border": "#26262A",
+    "borderStrong": "#4A4A4A",
+    "divider": "#1A1A1D"
+  },
+  "typography": {
+    "displayFontFamily": "Fraunces",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Let the UI breathe. Minimal borders, prefer spacing and glass for separation.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 0,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use glass on bottom tab bar, sticky headers, bottom-sheet drag handles.",
+      "Use glass on featured concierge cards overlaid on hotel imagery.",
+      "Ensure text on glass has translucent tinted base underneath (\u226575% opacity of surface) for readability."
+    ],
+    "dont's": [
+      "Do not use glass on dense form inputs or body text regions.",
+      "Do not apply glass to every list row in the staff queue."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Role selection and authentication with a cinematic hotel backdrop.",
+      "states": {
+        "loading": "Centered brand-tinted spinner over blurred background",
+        "empty": "N/A",
+        "error": "Glassmorphic toast error at the top"
+      },
+      "layout": "Full-bleed background image of the luxury resort exterior. A dark vertical gradient scrim overlay (transparent at 0%, 90% surface at bottom). At the bottom 40%: The hotel wordmark in Fraunces, followed by minimal text inputs for Email/Password and a primary Antique Gold 'Login' button. Below it, a subtle role-toggle (Guest/Staff/Admin)."
+    },
+    {
+      "name": "Guest Chat",
+      "purpose": "The primary interface for guests to talk to the AI Concierge.",
+      "states": {
+        "loading": "Typing indicator in chat bubble",
+        "empty": "Hero area with AI assistant avatar greeting the user, suggested action chips (Room Service, Valet) below.",
+        "error": "Inline error message below failed prompt"
+      },
+      "layout": "Header: Glass effect with the hotel logo. Middle: Chat thread. AI bubbles are surfaceSecondary, user bubbles are brandTertiary. Bottom: Fixed composer with both text input and a prominent microphone dictation button. Live speech preview appears directly above the composer while speaking."
+    },
+    {
+      "name": "Guest My Requests",
+      "purpose": "Track status of guest requests.",
+      "states": {
+        "loading": "Skeleton list",
+        "empty": "Illustration of a bellhop or 'No active requests' text with a 'New Request' CTA.",
+        "error": "Error text with a 'Retry' button"
+      },
+      "layout": "Large display title 'Taleplerim'. List layout. Each card shows the Request Type (Fraunces), Time, and a prominent State Machine progress tracker (Al\u0131nd\u0131 -> Personel Gidiyor -> Tamamland\u0131) using brand primary to indicate active step."
+    },
+    {
+      "name": "Department Queue",
+      "purpose": "Staff view for incoming tasks.",
+      "states": {
+        "loading": "Skeleton list",
+        "empty": "Text 'Kuyruk bo\u015f' (Queue is empty) with a checkmark icon.",
+        "error": "Error text with 'Retry' button"
+      },
+      "layout": "Strict utility layout while maintaining the dark luxe theme. Top: 'Bekleyen \u0130\u015fler' title and filter chips (All, Urgent). Below: List of task cards. Each card uses surfaceSecondary background. Priority dot, Room Number + Task Title. Bottom of card has two prominent actions: Accept (brandPrimary) and Reject (surfaceTertiary)."
+    },
+    {
+      "name": "Department Active Jobs",
+      "purpose": "Tasks currently assigned and in progress.",
+      "states": {
+        "loading": "Skeleton list",
+        "empty": "Text 'Aktif i\u015f yok' with calm icon.",
+        "error": "Error text with 'Retry' button"
+      },
+      "layout": "List of active tasks. The card emphasizes 'Tamamla' (Complete) action. Includes details like room number, requested time, and a quick contact button (phone icon) to call the guest if needed."
+    },
+    {
+      "name": "Admin Dashboard",
+      "purpose": "Operations center high-level overview.",
+      "states": {
+        "loading": "Skeleton metrics",
+        "empty": "N/A",
+        "error": "Error text with 'Retry' button"
+      },
+      "layout": "Grid of high-level metric cards (Total active requests, Average response time, Department load). Followed by a list of 'Urgent / Escalated' requests. Uses a 2-column grid for metrics with space-between layout."
+    }
+  ],
+  "images": {
+    "hero_login": {
+      "url": "https://images.pexels.com/photos/34429252/pexels-photo-34429252.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "dark": "https://images.unsplash.com/photo-1780283575089-eb917a09a5b1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxsdXh1cnklMjBob3RlbCUyMHJlc29ydCUyMGV4dGVyaW9yJTIwbmlnaHR8ZW58MHx8fHwxNzgxODY4NjU5fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Luxury resort exterior at dusk/night"
+    },
+    "brand_logo": {
+      "url": "https://images.unsplash.com/photo-1591286652699-dd3ba83136cb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxmb3VyJTIwc2Vhc29ucyUyMGhvdGVsJTIwbG9nbyUyMHBuZ3xlbnwwfHx8fDE3ODE4Njg2NTl8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Hotel Logo Wordmark"
+    },
+    "ai_avatar": {
+      "url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxhaSUyMGFzc2lzdGFudCUyMG1pbmltYWxpc3QlMjBhdmF0YXIlMjAzZHxlbnwwfHx8fDE3ODE4Njg2NTl8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "AI Concierge minimalist portrait"
+    }
+  },
+  "haptics": {
+    "login_submit": "impactMedium",
+    "tab_switch": "selection",
+    "send_chat_message": "impactLight",
+    "voice_record_start": "impactMedium",
+    "voice_record_stop": "impactLight",
+    "task_accept": "notificationSuccess",
+    "task_reject": "notificationWarning",
+    "task_complete": "notificationSuccess"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the 6 Glass / Luxe personality token mapping. Use the Antique Gold brand colors to evoke a 5-star hotel feel.",
+    "For the Login screen, implement the gradient-to-dark scrim pattern (transparent -> 90% surface) over the hero background image to ensure the auth form is readable.",
+    "Guest Chat must contain an integrated text/voice composer at the bottom. Implement a live speech preview or waveform while the user holds the record button.",
+    "Do NOT use any blue colors. Use the provided deep slate and antique gold hex codes.",
+    "Staff queues must follow a scannable list layout with clear visual hierarchy: Priority indicator, Room No., Task Title, and Accept/Reject buttons.",
+    "Ensure the status tracker in 'Guest My Requests' clearly maps out 'Al\u0131nd\u0131', 'Personel Gidiyor', and 'Tamamland\u0131'.",
+    "Use Fraunces (serif) only for large display titles and primary branding elements. Use Geist (sans-serif) for all other UI and lists to maintain high readability.",
+    "Add the prescribed haptic feedback events directly to button presses."
+  ]
+}
