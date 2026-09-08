@@ -2095,7 +2095,6 @@ AKILLI YÖNLENDİRME KURALLARI:
 8. Departman SADECE bu 5'ten biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale.
 9. ASLA alakasız fiyat listeleri veya menüler dökme. Yalnızca misafirin sorduğu ürün/hizmete odaklan. Misafir açıkça tüm menüyü veya fiyat listesini istemedikçe toplu liste verme. İstek belirsizse açıklama iste.
 10. Samimi ve doğal olmak için ASLA bilgi uydurma. Otel hakkında yalnızca sağlanan AI_KNOWLEDGE_BASE ve aktif servis verisini kullan; bilgi yoksa açıkça söyle ve resepsiyona yönlendir.
-11. Misafirin belirttiği blok, kanat, restoran, resepsiyon noktası, oda veya masa bilgisini "detay" alanında eksiksiz koru. Bu bilgiler personel görev alanı güvenlik kontrolünde kullanılacaktır.
 
 YANIT FORMATI (HER ZAMAN sadece geçerli JSON, başka metin yok):
 {
