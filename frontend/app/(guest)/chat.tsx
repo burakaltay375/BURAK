@@ -14,19 +14,27 @@ import { COLORS, SPACING, RADIUS, TYPE, DEPT_LABEL, SERVICE_LABELS } from "@/src
 
 type Msg = { role: "user" | "assistant"; content: string; parsed?: any };
 
-const SUGGESTIONS = [
+const GUEST_SUGGESTIONS = [
   { text: "Oda servisi: 2 espresso ve tost", service: "room_service" },
   { text: "Kuru temizleme talebi", service: "laundry" },
   { text: "Klima çalışmıyor, yardım edin", service: null },
   { text: "Ek havlu lütfen", service: null },
 ];
 
+const STAFF_SUGGESTIONS = [
+  { text: "Bugünkü görevlerimi göster", service: null },
+  { text: "Çalışma alanım nedir?", service: null },
+  { text: "Bekleyen görevleri göster", service: null },
+  { text: "Bugünkü vardiyam nedir?", service: null },
+];
+
 export default function GuestChat() {
   const { user } = useAuth();
+  const isStaff = user?.role === "staff";
   const [messages, setMessages] = useState<Msg[]>([
     {
       role: "assistant",
-      content: user?.role === "staff"
+      content: isStaff
         ? `Merhaba, ${user?.name?.split(" ")[0] ?? "ekip arkadaşım"}. Ben Hospira AI Asistan. Personel sohbetleri not ve yardım içindir; operasyon talebi sadece misafir sohbetinden oluşturulur.`
         : `Hoş geldiniz, ${user?.name?.split(" ")[0] ?? "Misafirimiz"}. Ben Hospira AI Asistan. Mesajınızı yazabilir ya da mikrofona basılı tutarak söyleyebilirsiniz.`,
     },
@@ -105,15 +113,15 @@ export default function GuestChat() {
       <View style={s.header}>
         <HospiraMark size={48} />
         <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>Hospira Konsiyerj</Text>
+          <Text style={s.headerTitle}>{isStaff ? "Hospira Operasyon AI" : "Hospira Konsiyerj"}</Text>
           <Text style={s.headerSub}>
-            {user?.role === "staff"
+            {isStaff
               ? `Personel AI · ${DEPT_LABEL[user.department ?? ""] ?? "Departman"}`
               : `Her zaman hizmetinizde · Oda ${user?.room_no ?? "—"}`}
           </Text>
         </View>
       </View>
-      {!!enabledServices.length && (
+      {!isStaff && !!enabledServices.length && (
         <View style={s.servicesRow}>
           <Text style={s.servicesLabel}>Aktif servisler:</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.servicesChips}>
@@ -149,7 +157,9 @@ export default function GuestChat() {
           )}
           {messages.length <= 1 && (
             <View style={s.suggestRow}>
-              {SUGGESTIONS.filter((q) => !q.service || services?.[q.service] !== false).map((q) => (
+              {(isStaff ? STAFF_SUGGESTIONS : GUEST_SUGGESTIONS)
+                .filter((q) => !q.service || services?.[q.service] !== false)
+                .map((q) => (
                 <Pressable key={q.text} testID={`suggestion-${q.text}`} onPress={() => send(q.text)} style={s.suggestChip}>
                   <Text style={s.suggestText}>{q.text}</Text>
                 </Pressable>
@@ -165,7 +175,7 @@ export default function GuestChat() {
             <TextInput
               testID="chat-input"
               value={input} onChangeText={setInput}
-              placeholder="Talebinizi yazın…"
+              placeholder={isStaff ? "Operasyon sorunuzu yazın…" : "Talebinizi yazın…"}
               placeholderTextColor={COLORS.onSurfaceTertiary}
               style={s.input}
               onSubmitEditing={() => send()}

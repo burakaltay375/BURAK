@@ -2112,14 +2112,44 @@ YANIT FORMATI (HER ZAMAN sadece geçerli JSON, başka metin yok):
 
 ÖNEMLİ: Sadece JSON dön. Markdown bloğu, açıklama yok. Sadece ham JSON. "request" alanı null olabilir, bu durumda atla veya null koy."""
 
+STAFF_AI_SYSTEM_PROMPT = """Sen Hospira otel personeli dahili operasyon asistanısın.
+Kullanıcı authenticated bir otel çalışanıdır; misafir değildir.
+Personelin atanmış ve bekleyen görevleri, vardiyası, çalışma alanı, sorumlulukları,
+oda/alan operasyonları, otel prosedürleri ve görevlerin uygulanması hakkında yardımcı ol.
+Yalnızca sistem tarafından verilen PERSONEL_OPERASYON_CONTEXT verisini kullan; görev,
+vardiya veya sorumluluk uydurma.
+Rezervasyon yapmayı, oda servisi siparişi vermeyi veya otel hizmetlerinden misafir gibi
+yararlanmayı teklif etme. Misafir talebi oluşturma.
+Yanıtın kısa, doğrudan ve personel odaklı olsun.
+Sadece şu JSON biçiminde yanıt ver:
+{"reply":"<personel odaklı yanıt>","ready":false,"request":null}"""
 
-async def call_llm(session_id: str, message: str, history: List[dict]) -> Dict[str, Any]:
+MANAGER_AI_SYSTEM_PROMPT = """Sen Hospira hotel manager dahili operasyon asistanısın.
+Kullanıcı authenticated bir hotel manager'dır. Otel operasyonları, personel, görevler,
+vardiyalar ve yönetim süreçleri hakkında yardımcı ol. Misafir asistanı gibi davranma,
+rezervasyon veya oda servisi teklif etme. Yalnızca verilen yönetim context'ini kullan.
+Sadece şu JSON biçiminde yanıt ver:
+{"reply":"<manager odaklı yanıt>","ready":false,"request":null}"""
+
+ADMIN_AI_SYSTEM_PROMPT = """Sen Hospira sistem yöneticisi dahili operasyon asistanısın.
+Kullanıcı authenticated bir sistem yöneticisidir. Platform, oteller, kullanıcılar ve
+operasyon durumu hakkında yardımcı ol. Misafir asistanı gibi davranma ve veri uydurma.
+Sadece şu JSON biçiminde yanıt ver:
+{"reply":"<admin odaklı yanıt>","ready":false,"request":null}"""
+
+
+async def call_llm(
+    session_id: str,
+    message: str,
+    history: List[dict],
+    system_message: str = ORCH_SYSTEM,
+) -> Dict[str, Any]:
     """Call Claude Sonnet 4.5 via emergentintegrations. Returns parsed dict or raises."""
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=session_id,
-        system_message=ORCH_SYSTEM,
+        system_message=system_message,
     ).with_model("anthropic", "claude-sonnet-4-5-20250929")
     # Replay history (kept short)
     full_text = ""
@@ -2236,6 +2266,165 @@ def fallback_orchestrate(message: str, history: List[dict], service_context: Opt
         "ready": True,
         "request": parsed,
     }
+
+
+def _task_summary(tasks: List[dict]) -> str:
+    if not tasks:
+        return "Yok"
+    return "; ".join(
+        f"{task.get('hizmet_turu') or task.get('task') or 'Görev'}"
+        f" (Oda/Alan: {task.get('room_no') or '—'}, Durum: {task.get('status') or 'Planlı'})"
+        for task in tasks[:10]
+    )
+
+
+async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
+    role = role_of(user)
+    hotel_id = user_hotel_id(user)
+    if role == "staff":
+        today = datetime.now(timezone.utc).date().isoformat()
+        assigned = await db.requests.find(
+            with_hotel_scope(user, {
+                "assigned_staff_id": user["id"],
+                "status": "PERSONEL_GIDIYOR",
+            }),
+            {"_id": 0},
+        ).sort("updated_at", -1).to_list(50)
+        pending = await db.requests.find(
+            with_hotel_scope(user, {
+                "departman": user.get("department"),
+                "status": "ALINDI",
+            }),
+            {"_id": 0},
+        ).sort("created_at", 1).to_list(50)
+        pending = [
+            task for task in pending
+            if staff_request_scope_compatibility(user, task)[0]
+        ]
+        schedules = await db.staff_schedules.find(
+            with_hotel_scope(user, {
+                "employee_id": user["id"],
+                "date": today,
+            }),
+            {"_id": 0},
+        ).sort("start_time", 1).to_list(50)
+        return {
+            "authenticated_role": "staff",
+            "name": user.get("name"),
+            "position": user.get("position"),
+            "department": DEPARTMENTS.get(user.get("department"), user.get("department")),
+            "work_area": user.get("work_area"),
+            "responsibility_description": user.get("responsibility_description"),
+            "date": today,
+            "assigned_tasks": assigned,
+            "eligible_pending_tasks": pending,
+            "today_schedules": schedules,
+        }
+    if role == "hotel_manager":
+        scope = {"$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]}
+        return {
+            "authenticated_role": "hotel_manager",
+            "name": user.get("name"),
+            "active_staff_count": await db.users.count_documents({
+                **scope, "role": "staff", "active": {"$ne": False},
+            }),
+            "pending_request_count": await db.requests.count_documents({
+                **scope, "status": "ALINDI",
+            }),
+            "active_request_count": await db.requests.count_documents({
+                **scope, "status": "PERSONEL_GIDIYOR",
+            }),
+        }
+    return {
+        "authenticated_role": "system_admin",
+        "name": user.get("name"),
+        "hotel_count": await db.hotels.count_documents({}),
+        "active_user_count": await db.users.count_documents({"active": {"$ne": False}}),
+    }
+
+
+def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
+    normalized = normalize_assignment_text(message)
+    first_name = str(context.get("name") or "ekip arkadaşım").split()[0]
+    assigned = context.get("assigned_tasks") or []
+    pending = context.get("eligible_pending_tasks") or []
+    schedules = context.get("today_schedules") or []
+    if normalized in {"merhaba", "selam", "iyi gunler", "gunaydin"}:
+        return (
+            f"Merhaba {first_name}. Bugün size atanmış {len(assigned)} aktif görev, "
+            f"çalışma alanınızda {len(pending)} bekleyen görev bulunuyor. "
+            "Görevlerinizi, vardiyanızı veya sorumluluk alanınızı kontrol edebilirim."
+        )
+    if "gorev" in normalized and any(
+        word in normalized for word in ("bugun", "atan", "goster", "nedir")
+    ):
+        schedule_summary = _task_summary(schedules)
+        return (
+            f"Size atanmış aktif görevler: {_task_summary(assigned)}. "
+            f"Bugünkü vardiya planınız: {schedule_summary}."
+        )
+    if any(phrase in normalized for phrase in (
+        "hangi bolum", "neden sorumluyum", "sorumluluk alanim",
+        "calisma alanim", "gorev alanim",
+    )):
+        return (
+            f"Göreviniz: {context.get('position') or 'Belirtilmemiş'}. "
+            f"Operasyon bölümünüz: {context.get('department') or 'Belirtilmemiş'}. "
+            f"Çalışma alanınız: {context.get('work_area') or 'Belirtilmemiş'}. "
+            f"Sorumluluk tanımınız: "
+            f"{context.get('responsibility_description') or 'Manager tarafından henüz tanımlanmamış'}."
+        )
+    if "vardiya" in normalized:
+        return f"Bugünkü vardiya planınız: {_task_summary(schedules)}."
+    if "bekleyen" in normalized and "gorev" in normalized:
+        return f"Çalışma alanınıza uygun bekleyen görevler: {_task_summary(pending)}."
+    return (
+        "Personel operasyonları için atanmış görevlerinizi, vardiyanızı, çalışma "
+        "alanınızı veya uygulanacak otel prosedürünü sorabilirsiniz."
+    )
+
+
+async def orchestrate_authenticated_role(
+    session_id: str,
+    message: str,
+    history: List[dict],
+    user: dict,
+) -> Dict[str, Any]:
+    context = await authenticated_operations_context(user)
+    role = role_of(user)
+    prompt = {
+        "staff": STAFF_AI_SYSTEM_PROMPT,
+        "hotel_manager": MANAGER_AI_SYSTEM_PROMPT,
+        "system_admin": ADMIN_AI_SYSTEM_PROMPT,
+    }[role]
+    if EMERGENT_LLM_KEY:
+        try:
+            system_message = (
+                f"{prompt}\n\nAUTHENTICATED_OPERATIONS_CONTEXT:\n"
+                f"{json.dumps(context, ensure_ascii=False, default=str)}"
+            )
+            result = await call_llm(session_id, message, history, system_message)
+            return {
+                "reply": str(result.get("reply") or "").strip(),
+                "ready": False,
+                "request": None,
+            }
+        except Exception as exc:
+            logger.warning("%s AI failed, using operational fallback: %s", role, exc)
+    if role == "staff":
+        reply = staff_operational_fallback(message, context)
+    elif role == "hotel_manager":
+        reply = (
+            f"Otel operasyon özeti: {context['pending_request_count']} bekleyen, "
+            f"{context['active_request_count']} aktif görev ve "
+            f"{context['active_staff_count']} aktif personel bulunuyor."
+        )
+    else:
+        reply = (
+            f"Sistem özeti: {context['hotel_count']} otel ve "
+            f"{context['active_user_count']} aktif kullanıcı bulunuyor."
+        )
+    return {"reply": reply, "ready": False, "request": None}
 
 
 async def orchestrate(session_id: str, message: str, history: List[dict], service_context: Optional[Dict[str, Any]] = None, user: Optional[dict] = None) -> Dict[str, Any]:
@@ -2650,6 +2839,23 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
         "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
         "role": "user", "content": body.message, "created_at": now_iso(),
     })
+
+    if role_of(u) != "guest":
+        result = await orchestrate_authenticated_role(
+            session_id, body.message, history, u
+        )
+        reply = str(result.get("reply") or "").strip()
+        await db.chat_messages.insert_one({
+            "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+            "role": "assistant", "content": reply, "created_at": now_iso(),
+        })
+        return ChatOut(
+            session_id=session_id,
+            reply=reply,
+            ready=False,
+            request_id=None,
+            parsed=None,
+        )
 
     if pending_request and role_of(u) == "guest":
         if is_confirmation(body.message):
