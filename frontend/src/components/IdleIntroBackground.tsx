@@ -151,14 +151,7 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
   }, [handleInteraction, handleMouseMove]);
 
   return (
-    <View
-      style={styles.root}
-      testID="idle-intro-shell"
-      dataSet={{
-        introReady: introUrl ? "true" : "false",
-        introHome: isHome ? "true" : "false",
-      }}
-    >
+    <View style={styles.root} testID="idle-intro-shell">
       <View style={styles.baseBackground} />
       {showIntro && introUrl && (
         <View
