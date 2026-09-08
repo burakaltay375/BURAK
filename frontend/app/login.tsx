@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, TextInput, StyleSheet, Pressable, KeyboardAvoidingView,
   Platform, ScrollView, ActivityIndicator,
@@ -15,6 +15,34 @@ import { dashboardRouteForRole } from "@/src/roles";
 import { COLORS, SPACING, RADIUS, TYPE } from "@/src/theme";
 
 const HERO = "https://images.unsplash.com/photo-1780283575089-eb917a09a5b1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxsdXh1cnklMjBob3RlbCUyMHJlc29ydCUyMGV4dGVyaW9yJTIwbmlnaHR8ZW58MHx8fHwxNzgxODY4NjU5fDA&ixlib=rb-4.1.0&q=85";
+const HOTEL_BACKGROUND_FALLBACKS = [
+  HERO,
+  "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=2000&q=85",
+  "https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=2000&q=85",
+  "https://images.unsplash.com/photo-1551882547-ff40c63fe5fa?auto=format&fit=crop&w=2000&q=85",
+];
+
+function fallbackBackgroundForHotel(hotel?: Hotel) {
+  if (!hotel) return HERO;
+  const key = `${hotel.id}:${hotel.hotel_name}`.toLocaleLowerCase("tr-TR");
+  if (key.includes("astoria") || hotel.id === "default-hotel") return HERO;
+  const hash = Array.from(key).reduce((total, character) => total + character.charCodeAt(0), 0);
+  return HOTEL_BACKGROUND_FALLBACKS[hash % HOTEL_BACKGROUND_FALLBACKS.length];
+}
+
+function hotelBackgroundFor(hotel?: Hotel) {
+  const source = [
+    hotel?.image_url,
+    hotel?.image,
+    hotel?.background_url,
+    hotel?.background,
+    hotel?.logo_url,
+  ].find((value): value is string => Boolean(value?.trim()));
+  return {
+    primary: resolveApiUrl(source),
+    fallback: fallbackBackgroundForHotel(hotel),
+  };
+}
 
 export default function Login() {
   const router = useRouter();
@@ -32,7 +60,13 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [failedLogoIds, setFailedLogoIds] = useState<Record<string, boolean>>({});
+  const [failedBackgroundKey, setFailedBackgroundKey] = useState<string | null>(null);
   const selectedHotel = hotels.find((hotel) => hotel.id === selectedHotelId);
+  const selectedBackground = useMemo(() => hotelBackgroundFor(selectedHotel), [selectedHotel]);
+  const backgroundKey = `${selectedHotel?.id ?? "fallback"}:${selectedBackground.primary ?? selectedBackground.fallback}`;
+  const backgroundUrl = selectedBackground.primary && failedBackgroundKey !== backgroundKey
+    ? selectedBackground.primary
+    : selectedBackground.fallback;
 
   useEffect(() => {
     let alive = true;
@@ -81,7 +115,15 @@ export default function Login() {
       hotel={selectedHotel}
       background={(
         <>
-          <Image source={{ uri: HERO }} style={StyleSheet.absoluteFillObject as any} contentFit="cover" />
+          <Image
+            key={`${selectedHotel?.id ?? "fallback"}:${backgroundUrl}`}
+            source={{ uri: backgroundUrl }}
+            style={StyleSheet.absoluteFillObject as any}
+            contentFit="cover"
+            cachePolicy="none"
+            recyclingKey={`${selectedHotel?.id ?? "fallback"}:${backgroundUrl}`}
+            onError={() => setFailedBackgroundKey(backgroundKey)}
+          />
           <LinearGradient
             colors={["rgba(15,15,17,0)", "rgba(15,15,17,0.6)", "rgba(15,15,17,0.96)"]}
             style={StyleSheet.absoluteFillObject as any}

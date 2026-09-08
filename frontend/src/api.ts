@@ -180,6 +180,10 @@ export type Hotel = {
   id: string;
   hotel_name: string;
   city: string;
+  image?: string | null;
+  image_url?: string | null;
+  background?: string | null;
+  background_url?: string | null;
   address?: string | null;
   latitude?: number | null;
   longitude?: number | null;

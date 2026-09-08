@@ -7,7 +7,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { resolveApiUrl, type Hotel } from "@/src/api";
 import { COLORS } from "@/src/theme";
 
-const DEFAULT_IDLE_DELAY_MS = 15_000;
+const DEFAULT_IDLE_DELAY_MS = 7_000;
 const IDLE_DELAY_MS = Math.max(
   Number(process.env.EXPO_PUBLIC_INTRO_IDLE_MS) || DEFAULT_IDLE_DELAY_MS,
   1_000,
@@ -20,15 +20,12 @@ type Props = {
 };
 
 export default function IdleIntroBackground({ children, hotel, background }: Props) {
-  const [showIntro, setShowIntro] = useState(false);
-  const showIntroRef = useRef(false);
+  const [isIdle, setIsIdle] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const playedSinceInteractionRef = useRef(false);
-  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const introUrl = resolveApiUrl(hotel?.intro_video_url);
 
-  const player = useVideoPlayer(introUrl, (instance) => {
-    instance.loop = false;
+  const player = useVideoPlayer(null, (instance) => {
+    instance.loop = true;
     instance.muted = true;
   });
 
@@ -37,100 +34,52 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
     timerRef.current = null;
   }, []);
 
-  const hideIntro = useCallback(() => {
-    showIntroRef.current = false;
-    setShowIntro(false);
+  const stopIntro = useCallback(() => {
+    setIsIdle(false);
     player.pause();
     player.currentTime = 0;
   }, [player]);
 
-  const startIntro = useCallback(() => {
-    if (!introUrl || playedSinceInteractionRef.current) return;
-    playedSinceInteractionRef.current = true;
-    showIntroRef.current = true;
-    setShowIntro(true);
+  const resetIdleTimer = useCallback(() => {
+    clearIdleTimer();
+    stopIntro();
+    timerRef.current = setTimeout(() => setIsIdle(Boolean(introUrl)), IDLE_DELAY_MS);
+  }, [clearIdleTimer, introUrl, stopIntro]);
+
+  useEffect(() => {
+    player.pause();
     player.currentTime = 0;
-    player.muted = true;
-    player.loop = false;
-    player.play();
-  }, [introUrl, player]);
+    player.replace(introUrl);
+    resetIdleTimer();
+    return clearIdleTimer;
+  }, [clearIdleTimer, introUrl, player, resetIdleTimer]);
 
-  const armIdleTimer = useCallback(() => {
-    clearIdleTimer();
-    if (!introUrl || playedSinceInteractionRef.current) return;
-    timerRef.current = setTimeout(startIntro, IDLE_DELAY_MS);
-  }, [clearIdleTimer, introUrl, startIntro]);
-
-  const handleInteraction = useCallback(() => {
-    clearIdleTimer();
-    if (showIntroRef.current) hideIntro();
-    playedSinceInteractionRef.current = false;
-    armIdleTimer();
-  }, [armIdleTimer, clearIdleTimer, hideIntro]);
-
-  const handleMouseMove = useCallback((event: MouseEvent) => {
-    const previous = lastPointerRef.current;
-    lastPointerRef.current = { x: event.clientX, y: event.clientY };
-    if (
-      previous &&
-      Math.abs(previous.x - event.clientX) < 4 &&
-      Math.abs(previous.y - event.clientY) < 4
-    ) {
+  useEffect(() => {
+    if (!isIdle || !introUrl) {
+      player.pause();
       return;
     }
-    handleInteraction();
-  }, [handleInteraction]);
-
-  useEffect(() => {
-    hideIntro();
-    playedSinceInteractionRef.current = false;
-    armIdleTimer();
-    return clearIdleTimer;
-  }, [armIdleTimer, clearIdleTimer, hideIntro]);
-
-  useEffect(() => {
-    const subscription = player.addListener("playToEnd", () => {
-      clearIdleTimer();
-      hideIntro();
-      // Do not re-arm here. A new user interaction starts the next idle cycle,
-      // which prevents the intro looping forever while nobody is present.
-    });
-    return () => subscription.remove();
-  }, [clearIdleTimer, hideIntro, player]);
-
-  useEffect(() => {
-    if (!showIntro) return;
-    // expo-video's playToEnd event is not reliable in every web browser.
-    // The backend already records the validated media duration, so use it
-    // as a bounded fallback without changing the existing API.
-    const durationSeconds = Math.min(
-      Math.max(hotel?.intro_video_duration ?? 300, 1),
-      300,
-    );
-    const fallback = setTimeout(hideIntro, (durationSeconds + 0.75) * 1_000);
-    return () => clearTimeout(fallback);
-  }, [hideIntro, hotel?.intro_video_duration, showIntro]);
+    player.currentTime = 0;
+    player.muted = true;
+    player.loop = true;
+    player.play();
+  }, [introUrl, isIdle, player]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
-    // `scroll` can fire after layout/data refreshes without user input. Wheel,
-    // touch and pointer events still cover real scrolling without allowing the
-    // dashboard's periodic refresh to keep resetting the idle timer.
-    const events = ["mousedown", "click", "touchstart", "touchmove", "pointerdown", "keydown", "wheel"] as const;
-    document.addEventListener("mousemove", handleMouseMove, { passive: true, capture: true });
-    events.forEach((event) => document.addEventListener(event, handleInteraction, { passive: true, capture: true }));
+    const events = ["mousemove", "mousedown", "click", "touchstart", "keydown", "wheel"] as const;
+    events.forEach((event) => document.addEventListener(event, resetIdleTimer, { passive: true, capture: true }));
     return () => {
-      document.removeEventListener("mousemove", handleMouseMove, { capture: true });
-      events.forEach((event) => document.removeEventListener(event, handleInteraction, { capture: true }));
+      events.forEach((event) => document.removeEventListener(event, resetIdleTimer, { capture: true }));
     };
-  }, [handleInteraction, handleMouseMove]);
+  }, [resetIdleTimer]);
 
   return (
-    <View style={styles.root} testID="idle-intro-shell">
+    <View style={styles.root} testID="idle-intro-shell" onTouchStart={resetIdleTimer}>
       <View pointerEvents="none" style={styles.baseBackground}>
         {background}
       </View>
-      {showIntro && introUrl && (
+      {isIdle && introUrl && (
         <View
           pointerEvents="none"
           style={styles.mediaLayer}
@@ -138,7 +87,14 @@ export default function IdleIntroBackground({ children, hotel, background }: Pro
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         >
-          <VideoView player={player} style={styles.video} nativeControls={false} contentFit="cover" />
+          <VideoView
+            key={`${hotel?.id ?? "hotel"}:${introUrl}`}
+            player={player}
+            style={styles.video}
+            nativeControls={false}
+            contentFit="cover"
+            playsInline
+          />
           <BlurView intensity={18} tint="dark" style={StyleSheet.absoluteFillObject} />
           <View style={styles.dimOverlay} />
         </View>
