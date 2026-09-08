@@ -28,7 +28,8 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
   const showIntroRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playedSinceInteractionRef = useRef(false);
-  const isHome = pathname === homePath;
+  const normalizedPath = pathname.replace(/^\/operasyon(?=\/|$)/, "") || "/";
+  const isHome = normalizedPath === homePath;
   const hotelId = user?.hotel_id || user?.hotelId || null;
   const introUrl = resolveApiUrl(hotel?.intro_video_url);
 
@@ -117,7 +118,7 @@ export default function IdleIntroBackground({ children, homePath }: Props) {
   }, [handleInteraction]);
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} testID="idle-intro-shell">
       <View style={styles.baseBackground} />
       {showIntro && introUrl && (
         <View
