@@ -2175,6 +2175,10 @@ DEPT_KEYWORDS = {
         "temizle", "temizlen", "mini bar", "minibar", "yastık", "yastik",
     ],
     "vale": ["vale", "araba", "araç", "park", "otopark", "anahtar"],
+    "concierge": [
+        "geç çıkış", "gec cikis", "late checkout", "late check-out",
+        "resepsiyon", "reception", "konsiyerj", "concierge", "rezervasyon",
+    ],
 }
 
 PRIORITY_KEYWORDS = {
@@ -2205,11 +2209,171 @@ def rule_based_extract(text: str) -> Dict[str, Any]:
         m2 = re.search(r"saat\s+(\d{1,2})", t)
         if m2:
             out["zaman"] = f"{int(m2.group(1)):02d}:00"
+        else:
+            m3 = re.search(r"\b(sabah|öğlen|oglen|akşam|aksam|gece)\s+(\d{1,2})(?:'?[dt][ea])?", t)
+            if m3:
+                hour = int(m3.group(2))
+                if m3.group(1) in {"öğlen", "oglen", "akşam", "aksam", "gece"} and hour < 12:
+                    hour += 12
+                out["zaman"] = f"{hour % 24:02d}:00"
     for pri, kws in PRIORITY_KEYWORDS.items():
         if any(k in t for k in kws):
             out["oncelik"] = pri
             break
     return out
+
+
+def extract_operational_quantity(text: str) -> Optional[int]:
+    """Extract an item count without confusing room, floor, or time numbers."""
+    normalized = normalize_assignment_text(text)
+    match = re.search(r"\b(\d{1,3})\s*(?:adet|tane)\b", normalized)
+    if not match:
+        match = re.search(
+            r"\b(\d{1,3})\s+(?!numarali\b|no\b|oda\b|kat\b|saat\b)"
+            r"[^\W\d_]+",
+            normalized,
+            flags=re.UNICODE,
+        )
+    return int(match.group(1)) if match else None
+
+
+def extract_pending_room_number(text: str) -> tuple[Optional[str], Optional[str]]:
+    """Read a room supplied as a follow-up and preserve trailing detail."""
+    parsed_room = rule_based_extract(text).get("oda_no")
+    if parsed_room:
+        return str(parsed_room), None
+    match = re.fullmatch(r"\s*(\d{1,4})(?:\s*[,;.-]\s*(.+))?\s*", text)
+    if not match:
+        return None, None
+    detail = (match.group(2) or "").strip() or None
+    return match.group(1), detail
+
+
+def build_pending_operational_request(
+    parsed: Dict[str, Any],
+    message: str,
+) -> Dict[str, Any]:
+    """Create backend-owned conversational state using the existing chat store."""
+    department = parsed.get("departman")
+    service_key = parsed.get("service_key") or DEPARTMENT_SERVICE_MAP.get(department)
+    room_no = str(parsed.get("oda_no") or "").strip() or None
+    requested_time = parsed.get("zaman") or "Şimdi"
+    missing = [] if room_no else ["room_no"]
+    request_type = parsed.get("hizmet_turu") or DEPARTMENTS.get(department)
+    return {
+        # Existing request fields remain the source used by request creation.
+        "departman": department,
+        "service_key": service_key,
+        "hizmet_turu": request_type,
+        "oda_no": room_no,
+        "zaman": requested_time,
+        "detay": parsed.get("detay") or message.strip(),
+        "oncelik": (parsed.get("oncelik") or "ORTA").upper(),
+        # Conversational metadata is deliberately extensible by request type.
+        "intent": parsed.get("intent") or service_key or department,
+        "request_type": request_type,
+        "quantity": parsed.get("quantity") or extract_operational_quantity(message),
+        "priority": (parsed.get("oncelik") or "ORTA").upper(),
+        "requested_time": requested_time,
+        "location": parsed.get("location") or room_no,
+        "preferences": parsed.get("preferences"),
+        "additional_details": list(parsed.get("additional_details") or []),
+        "missing_required_fields": missing,
+        "conversation_status": "PENDING_FIELDS" if missing else "READY",
+    }
+
+
+def normalize_pending_operational_request(pending: Dict[str, Any]) -> Dict[str, Any]:
+    """Upgrade legacy pending request dictionaries in-place-compatible form."""
+    state = build_pending_operational_request(
+        pending,
+        str(pending.get("detay") or ""),
+    )
+    state.update(pending)
+    state["additional_details"] = list(state.get("additional_details") or [])
+    room_no = str(state.get("oda_no") or "").strip() or None
+    state["oda_no"] = room_no
+    state["location"] = state.get("location") or room_no
+    missing = list(state.get("missing_required_fields") or [])
+    if not room_no and "room_no" not in missing:
+        missing.append("room_no")
+    if room_no:
+        missing = [field for field in missing if field != "room_no"]
+    state["missing_required_fields"] = missing
+    state["conversation_status"] = "PENDING_FIELDS" if missing else "READY"
+    return state
+
+
+def merge_pending_operational_request(
+    pending: Dict[str, Any],
+    message: str,
+) -> tuple[Dict[str, Any], bool]:
+    """Merge only fields expected by active backend conversation state."""
+    state = normalize_pending_operational_request(pending)
+    missing = list(state["missing_required_fields"])
+    changed = False
+
+    if "room_no" in missing:
+        room_no, trailing_detail = extract_pending_room_number(message)
+        if room_no:
+            state["oda_no"] = room_no
+            state["location"] = room_no
+            missing.remove("room_no")
+            changed = True
+            if trailing_detail:
+                state["additional_details"].append(trailing_detail)
+
+    if "quantity" in missing:
+        quantity = extract_operational_quantity(message)
+        if quantity is not None:
+            state["quantity"] = quantity
+            missing.remove("quantity")
+            changed = True
+
+    if "requested_time" in missing:
+        requested_time = rule_based_extract(message).get("zaman")
+        if requested_time:
+            state["zaman"] = requested_time
+            state["requested_time"] = requested_time
+            missing.remove("requested_time")
+            changed = True
+
+    if changed:
+        details = [str(state.get("detay") or "").strip()]
+        details.extend(str(item).strip() for item in state["additional_details"] if str(item).strip())
+        state["detay"] = "\nEk bilgi: ".join(filter(None, details))
+    state["missing_required_fields"] = missing
+    state["conversation_status"] = "PENDING_FIELDS" if missing else "READY"
+    return state, changed
+
+
+def pending_details_reply(pending: Dict[str, Any]) -> str:
+    missing = pending.get("missing_required_fields") or []
+    if not missing:
+        return "Bilgileri talebe ekledim. Talebi oluşturmamı onaylıyor musunuz?"
+    labels = {
+        "room_no": "oda numaranızı",
+        "quantity": "miktarı",
+        "requested_time": "istediğiniz zamanı",
+        "location": "konumu",
+    }
+    requested = [labels.get(field, field.replace("_", " ")) for field in missing]
+    if requested == ["oda numaranızı"]:
+        return "Tabii. Oda numaranızı paylaşır mısınız?"
+    return f"Talebinizi tamamlamak için lütfen {' ve '.join(requested)} paylaşır mısınız?"
+
+
+def message_clearly_changes_pending_topic(message: str) -> bool:
+    """Avoid applying unrelated chat to a pending operational request."""
+    normalized = normalize_assignment_text(message)
+    unrelated_markers = (
+        "hava nasil", "bugun hava", "merhaba", "selam", "nasilsin",
+        "saat kac", "otel hakkinda", "bilgi verir",
+    )
+    return (
+        any(marker in normalized for marker in unrelated_markers)
+        or (message.strip().endswith("?") and not rule_based_extract(message).get("departman"))
+    )
 
 ORCH_SYSTEM = """Sen "Otel Akıllı Operasyon Merkezi" yapay zekasısın (AI Concierge). Misafirlerin taleplerini dinler, niyetlerini analiz eder ve İLGİLİ DEPARTMANA yönlendirirsin.
 
@@ -2232,7 +2396,7 @@ AKILLI YÖNLENDİRME KURALLARI:
 5. SIKAYET mesajında yalnızca bildirilen soruna odaklan ve çözüm için gerekli eksik bilgiyi sor.
 6. Eksik bilgi varsa (oda no, saat, spesifik detay) nezaketle sor; ready=false, request=null.
 7. Tüm bilgiler tamamsa: ready=true ve request dolu olsun; reply'da talebin hazırlandığını belirt ve oluşturmadan önce onay iste.
-8. Departman SADECE bu 5'ten biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale.
+8. Departman SADECE şunlardan biri olabilir: oda_servisi, housekeeping, teknik_destek, kuru_temizleme, vale, concierge.
 9. ASLA alakasız fiyat listeleri veya menüler dökme. Yalnızca misafirin sorduğu ürün/hizmete odaklan. Misafir açıkça tüm menüyü veya fiyat listesini istemedikçe toplu liste verme. İstek belirsizse açıklama iste.
 10. Samimi ve doğal olmak için ASLA bilgi uydurma. Otel hakkında yalnızca sağlanan AI_KNOWLEDGE_BASE ve aktif servis verisini kullan; bilgi yoksa açıkça söyle ve resepsiyona yönlendir.
 
@@ -2241,7 +2405,7 @@ YANIT FORMATI (HER ZAMAN sadece geçerli JSON, başka metin yok):
   "reply": "<misafire göstereceğin nazik kısa Türkçe cevap>",
   "ready": true/false,
   "request": {
-    "departman": "oda_servisi|housekeeping|teknik_destek|kuru_temizleme|vale",
+    "departman": "oda_servisi|housekeeping|teknik_destek|kuru_temizleme|vale|concierge",
     "oda_no": "XXX",
     "hizmet_turu": "Kısa tanım",
     "zaman": "HH:MM",
@@ -2393,8 +2557,9 @@ def service_answer(message: str, service_context: Dict[str, Any], user: Optional
 
 def fallback_orchestrate(message: str, history: List[dict], service_context: Optional[Dict[str, Any]] = None, user: Optional[dict] = None) -> Dict[str, Any]:
     """Pure rule-based fallback when LLM unavailable."""
-    # Aggregate context from previous user messages
-    full = " ".join([h["content"] for h in history if h["role"] == "user"] + [message])
+    # Backend-owned pending state handles multi-turn requests. Reusing every
+    # previous user message here can resurrect an old request after topic changes.
+    full = message
     if service_context:
         kb_reply = knowledge_answer(full, service_context.get("ai_knowledge"))
         if kb_reply:
@@ -3464,6 +3629,7 @@ def is_explicit_guest_operation_request(message: str) -> bool:
     action_markers = (
         "istiyorum", "gonderebilir", "getirebilir", "doldurabilir", "temizle",
         "calismiyor", "bozuk", "ariza", "eksik", "rica ediyorum",
+        "alabilir miyim", "yardim lazim", "yardim gerekli", "yapmak istiyorum",
     )
     return any(marker in normalized for marker in action_markers)
 
@@ -3505,6 +3671,7 @@ async def guest_request_status_reply(user: dict, message: str) -> Optional[str]:
 
 
 async def create_guest_request_from_pending(pending: dict, u: dict, fallback_message: str, services: Dict[str, bool]) -> tuple[str, Dict[str, Any]]:
+    pending = normalize_pending_operational_request(pending)
     departman = pending.get("departman")
     if departman not in DEPARTMENTS:
         raise HTTPException(400, "Talep departmanı geçersiz")
@@ -3551,6 +3718,13 @@ async def create_guest_request_from_pending(pending: dict, u: dict, fallback_mes
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
+    for optional_field in (
+        "intent", "request_type", "quantity", "priority", "requested_time",
+        "location", "preferences", "additional_details",
+    ):
+        optional_value = pending.get(optional_field)
+        if optional_value not in (None, "", []):
+            req[optional_field] = optional_value
     if req["oncelik"] not in ("DUSUK", "ORTA", "YUKSEK"):
         req["oncelik"] = "ORTA"
     await db.requests.insert_one(req.copy())
@@ -3637,16 +3811,30 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
     if is_explicit_guest_operation_request(body.message):
         parsed = rule_based_extract(body.message)
         if parsed.get("departman") in DEPARTMENTS:
-            parsed["oda_no"] = parsed.get("oda_no") or u.get("room_no")
             parsed["zaman"] = parsed.get("zaman") or "Şimdi"
             service_key = DEPARTMENT_SERVICE_MAP.get(parsed["departman"])
             parsed["service_key"] = service_key
+            pending = build_pending_operational_request(parsed, body.message)
+            if pending["missing_required_fields"]:
+                reply = adapt_reception_tone(
+                    body.message, pending_details_reply(pending), history
+                )
+                await db.chat_messages.insert_one({
+                    "id": str(uuid.uuid4()), "session_id": session_id,
+                    "user_id": u["id"], "role": "assistant",
+                    "content": reply, "pending_request": pending,
+                    "created_at": now_iso(),
+                })
+                return ChatOut(
+                    session_id=session_id, reply=reply, ready=False,
+                    request_id=None, parsed=None,
+                )
             request_id, parsed_clean = await create_guest_request_from_pending(
-                parsed, u, body.message, services
+                pending, u, body.message, services
             )
             reply = adapt_reception_tone(
                 body.message,
-                "Talebiniz güvenli şekilde doğrulandı ve otel operasyon sistemine iletildi.",
+                f"{pending['oda_no']} numaralı oda için talebinizi oluşturdum ve otel operasyon sistemine ilettim.",
                 history,
             )
             await db.chat_messages.insert_one({
@@ -3659,18 +3847,7 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
             )
 
     if pending_request:
-        if is_confirmation(body.message):
-            request_id, parsed_clean = await create_guest_request_from_pending(pending_request, u, body.message, services)
-            reply = adapt_reception_tone(
-                body.message,
-                "Talebiniz onayınızla oluşturuldu ve ilgili ekibe iletildi.",
-                history,
-            )
-            await db.chat_messages.insert_one({
-                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
-                "role": "assistant", "content": reply, "created_at": now_iso(),
-            })
-            return ChatOut(session_id=session_id, reply=reply, ready=True, request_id=request_id, parsed=parsed_clean)
+        pending_state = normalize_pending_operational_request(pending_request)
         if is_rejection(body.message):
             reply = adapt_reception_tone(
                 body.message,
@@ -3682,18 +3859,69 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
                 "role": "assistant", "content": reply, "created_at": now_iso(),
             })
             return ChatOut(session_id=session_id, reply=reply, ready=False, request_id=None, parsed=None)
-        updated_pending = dict(pending_request)
-        updated_pending["detay"] = f"{pending_request.get('detay') or ''}\nEk bilgi: {body.message}".strip()
-        reply = adapt_reception_tone(
-            body.message,
-            "Bilgileri talebe ekledim. Talep oluşturmamı onaylıyor musunuz? Onaylıyorsanız 'evet' yazın.",
-            history,
+
+        updated_pending, fields_changed = merge_pending_operational_request(
+            pending_state, body.message
         )
-        await db.chat_messages.insert_one({
-            "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
-            "role": "assistant", "content": reply, "pending_request": updated_pending, "created_at": now_iso(),
-        })
-        return ChatOut(session_id=session_id, reply=reply, ready=False, request_id=None, parsed=None)
+        if fields_changed and not updated_pending["missing_required_fields"]:
+            request_id, parsed_clean = await create_guest_request_from_pending(
+                updated_pending, u, body.message, services
+            )
+            reply = adapt_reception_tone(
+                body.message,
+                f"{updated_pending['oda_no']} numaralı oda için talebinizi oluşturdum ve ilgili ekibe ilettim.",
+                history,
+            )
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+                "role": "assistant", "content": reply, "created_at": now_iso(),
+            })
+            return ChatOut(session_id=session_id, reply=reply, ready=True, request_id=request_id, parsed=parsed_clean)
+
+        if fields_changed:
+            reply = adapt_reception_tone(
+                body.message, pending_details_reply(updated_pending), history
+            )
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+                "role": "assistant", "content": reply,
+                "pending_request": updated_pending, "created_at": now_iso(),
+            })
+            return ChatOut(session_id=session_id, reply=reply, ready=False, request_id=None, parsed=None)
+
+        if is_confirmation(body.message) and not pending_state["missing_required_fields"]:
+            request_id, parsed_clean = await create_guest_request_from_pending(
+                pending_state, u, body.message, services
+            )
+            reply = adapt_reception_tone(
+                body.message,
+                "Talebiniz onayınızla oluşturuldu ve ilgili ekibe iletildi.",
+                history,
+            )
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+                "role": "assistant", "content": reply, "created_at": now_iso(),
+            })
+            return ChatOut(session_id=session_id, reply=reply, ready=True, request_id=request_id, parsed=parsed_clean)
+
+        if not message_clearly_changes_pending_topic(body.message):
+            updated_pending = dict(pending_state)
+            updated_pending["additional_details"] = [
+                *list(updated_pending.get("additional_details") or []),
+                body.message.strip(),
+            ]
+            updated_pending["detay"] = (
+                f"{pending_state.get('detay') or ''}\nEk bilgi: {body.message}"
+            ).strip()
+            reply = adapt_reception_tone(
+                body.message, pending_details_reply(updated_pending), history
+            )
+            await db.chat_messages.insert_one({
+                "id": str(uuid.uuid4()), "session_id": session_id, "user_id": u["id"],
+                "role": "assistant", "content": reply,
+                "pending_request": updated_pending, "created_at": now_iso(),
+            })
+            return ChatOut(session_id=session_id, reply=reply, ready=False, request_id=None, parsed=None)
 
     # If user has a known room, inject hint
     augmented = body.message
@@ -3714,21 +3942,19 @@ async def chat(body: ChatIn, u: dict = Depends(get_current_user)):
             reply = f"Otelimizde şu anda {DEPARTMENTS[req_data['departman']]} hizmeti aktif değil."
             req_data = {}
     if ready and req_data and req_data.get("departman") in DEPARTMENTS and role_of(u) == "guest":
-        oda = str(req_data.get("oda_no") or u.get("room_no") or "").strip()
+        oda = str(req_data.get("oda_no") or "").strip()
         if not oda:
             ready = False
-            reply = "Lütfen oda numaranızı paylaşır mısınız?"
+            pending_to_store = build_pending_operational_request(
+                req_data, body.message
+            )
+            reply = pending_details_reply(pending_to_store)
         else:
             service_key = req_data.get("service_key") or DEPARTMENT_SERVICE_MAP.get(req_data["departman"])
-            pending_to_store = {
-                "departman": req_data["departman"],
-                "service_key": service_key,
-                "hizmet_turu": req_data.get("hizmet_turu") or DEPARTMENTS[req_data["departman"]],
-                "oda_no": oda,
-                "zaman": req_data.get("zaman") or "—",
-                "detay": req_data.get("detay") or body.message,
-                "oncelik": (req_data.get("oncelik") or "ORTA").upper(),
-            }
+            req_data["service_key"] = service_key
+            pending_to_store = build_pending_operational_request(
+                req_data, body.message
+            )
             ready = False
             parsed_clean = None
             reply = reply or f"{pending_to_store['hizmet_turu']} talebinizi hazırladım. Oluşturmamı onaylıyor musunuz? Onaylıyorsanız 'evet' yazın."

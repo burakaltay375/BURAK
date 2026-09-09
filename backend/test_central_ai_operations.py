@@ -366,6 +366,105 @@ class CentralAiOperationsTest(unittest.TestCase):
         )
         self.assertEqual(forbidden_code, 403)
 
+    def test_general_multi_turn_guest_operational_state(self) -> None:
+        cases = (
+            ("Ek havlu istiyorum.", "204", "housekeeping", None),
+            ("Ek yastık istiyorum.", "305", "housekeeping", None),
+            ("Klima çalışmıyor.", "412", "teknik_destek", None),
+            ("3 havlu istiyorum.", "508", "housekeeping", 3),
+        )
+        for initial_message, room_number, department, quantity in cases:
+            suffix = uuid.uuid4().hex
+            guest_id = f"guest-state-{room_number}-{suffix}"
+            session_id = f"session-state-{suffix}"
+            scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
+            self.user_ids.append(guest_id)
+            self.database.users.insert_one({
+                "id": guest_id,
+                "email": f"state-{room_number}-{suffix}@test.local",
+                "name": f"State Guest {room_number}",
+                "role": "guest",
+                "room_no": room_number,
+                "active": True,
+                **scope,
+            })
+            self.database.rooms.insert_one({
+                "id": f"room-state-{room_number}-{suffix}",
+                "room_number": room_number,
+                "room_type": "Standard",
+                "type": "Standard",
+                "floor": room_number[:-2] or "1",
+                "capacity": 2,
+                "price_per_night": 100,
+                "operational_status": "normal",
+                "status": "occupied",
+                "is_active": True,
+                "created_at": server.now_iso(),
+                "updated_at": server.now_iso(),
+                **scope,
+            })
+
+            first_code, first = self.request(
+                "POST", "/api/chat", guest_id,
+                {"message": initial_message, "session_id": session_id},
+            )
+            self.assertEqual(first_code, 200, first)
+            self.assertFalse(first["ready"], first)
+            self.assertIsNone(first["request_id"], first)
+            self.assertIn("oda numaranızı", first["reply"].lower())
+            state_doc = self.database.chat_messages.find_one(
+                {"session_id": session_id, "user_id": guest_id, "role": "assistant"},
+                sort=[("created_at", -1)],
+            )
+            pending = state_doc["pending_request"]
+            self.assertEqual(pending["departman"], department)
+            self.assertEqual(pending["missing_required_fields"], ["room_no"])
+            self.assertEqual(pending.get("quantity"), quantity)
+
+            second_code, second = self.request(
+                "POST", "/api/chat", guest_id,
+                {"message": room_number, "session_id": session_id},
+            )
+            self.assertEqual(second_code, 200, second)
+            self.assertTrue(second["ready"], second)
+            task = self.database.requests.find_one({"id": second["request_id"]})
+            self.assertEqual(task["room_no"], room_number)
+            self.assertEqual(task["departman"], department)
+            self.assertEqual(task["guest_id"], guest_id)
+            self.assertEqual(task["hotel_id"], self.hotel_id)
+            self.assertEqual(task.get("quantity"), quantity)
+
+        direct_code, direct = self.request(
+            "POST", "/api/chat", self.guest_id,
+            {"message": "204 numaralı odaya 2 havlu istiyorum."},
+        )
+        self.assertEqual(direct_code, 200, direct)
+        self.assertTrue(direct["ready"], direct)
+        direct_task = self.database.requests.find_one({"id": direct["request_id"]})
+        self.assertEqual(direct_task["room_no"], "204")
+        self.assertEqual(direct_task["quantity"], 2)
+
+        topic_session = f"topic-change-{uuid.uuid4().hex}"
+        self.request(
+            "POST", "/api/chat", self.guest_id,
+            {"message": "Ek havlu istiyorum.", "session_id": topic_session},
+        )
+        before = self.database.requests.count_documents({"guest_id": self.guest_id})
+        _, changed = self.request(
+            "POST", "/api/chat", self.guest_id,
+            {"message": "Bugün hava nasıl?", "session_id": topic_session},
+        )
+        self.assertFalse(changed["ready"], changed)
+        self.assertEqual(
+            self.database.requests.count_documents({"guest_id": self.guest_id}),
+            before,
+        )
+        last_assistant = self.database.chat_messages.find_one(
+            {"session_id": topic_session, "user_id": self.guest_id, "role": "assistant"},
+            sort=[("created_at", -1)],
+        )
+        self.assertNotIn("pending_request", last_assistant)
+
     def test_out_of_scope_staff_is_not_assigned(self) -> None:
         status_code, created = self.request(
             "POST", "/api/chat", self.other_guest_id,
@@ -470,11 +569,11 @@ class CentralAiOperationsTest(unittest.TestCase):
     def test_supported_operation_types_and_internal_issue_isolation(self) -> None:
         cases = (
             ("204'te klima çalışmıyor.", "teknik_destek"),
-            ("Odamda iki tane ekstra havlu istiyorum.", "housekeeping"),
-            ("Mini barı doldurabilir misiniz?", "housekeeping"),
-            ("Restorandan odama yemek gönderebilir misiniz?", "oda_servisi"),
-            ("Televizyon çalışmıyor.", "teknik_destek"),
-            ("Ekstra yastık istiyorum.", "housekeeping"),
+            ("204 numaralı odama iki tane ekstra havlu istiyorum.", "housekeeping"),
+            ("204 numaralı odanın mini barını doldurabilir misiniz?", "housekeeping"),
+            ("Restorandan 204 numaralı odama yemek gönderebilir misiniz?", "oda_servisi"),
+            ("204 numaralı odada televizyon çalışmıyor.", "teknik_destek"),
+            ("204 numaralı odama ekstra yastık istiyorum.", "housekeeping"),
         )
         latest_housekeeping_id = None
         for message, department in cases:
