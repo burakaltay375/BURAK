@@ -673,6 +673,8 @@ class DepartmentScheduleOut(BaseModel):
     recurrence_group_id: Optional[str] = None
     repeat_weekdays: List[int] = Field(default_factory=list)
     repeat_until: Optional[str] = None
+    hotel_id: str
+    hotelId: str
     approved_by: Optional[str] = None
     approved_at: Optional[str] = None
     created_by: str

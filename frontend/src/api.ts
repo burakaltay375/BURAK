@@ -154,6 +154,8 @@ export type DepartmentSchedule = {
   recurrence_group_id?: string | null;
   repeat_weekdays?: number[];
   repeat_until?: string | null;
+  hotel_id: string;
+  hotelId: string;
   approved_by?: string | null;
   approved_at?: string | null;
   created_by: string;
