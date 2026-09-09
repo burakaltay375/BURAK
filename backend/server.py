@@ -2783,7 +2783,7 @@ async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
                 "date": {"$gte": today, "$lte": week_end},
             }),
             {"_id": 0},
-        ).sort("start_time", 1).to_list(50)
+        ).sort([("date", 1), ("start_time", 1)]).to_list(200)
         today_schedules = [
             schedule for schedule in week_schedules
             if schedule.get("date") == today
@@ -3758,38 +3758,62 @@ async def assign_request_to_best_staff(request_doc: dict) -> Optional[dict]:
     assignment_source = "secure_workload_fallback"
     assignment_reason = "Güvenli adaylar arasında en düşük aktif görev yükü"
     assignment_confidence: Optional[float] = None
+    ranked_candidates = sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate["context"]["current_workload"],
+            candidate["context"].get("name") or "",
+            candidate["context"]["id"],
+        ),
+    )
     if decision is not None:
         recommended_id = validate_assignment_ai_decision(
             decision, set(candidate_by_id)
         )
         if not recommended_id:
             logger.warning(
-                "Assignment AI returned an invalid candidate for request %s",
+                "Assignment AI returned an invalid decision for request %s; "
+                "using safe fallback",
                 request_doc.get("id"),
             )
-            return None
-        selected = candidate_by_id[recommended_id]
-        assignment_source = "assignment_ai"
-        assignment_reason = str(decision.get("reason") or "")[:1000]
-        assignment_confidence = float(decision["confidence"])
-    else:
-        selected = min(
-            candidates,
-            key=lambda candidate: (
-                candidate["context"]["current_workload"],
-                candidate["context"].get("name") or "",
-                candidate["context"]["id"],
-            ),
+            assignment_source = "secure_ai_invalid_fallback"
+            assignment_reason = "Geçersiz AI kararı sonrası güvenli workload fallback"
+        else:
+            selected = candidate_by_id[recommended_id]
+            ranked_candidates = [
+                selected,
+                *[
+                    candidate for candidate in ranked_candidates
+                    if candidate["staff"]["id"] != recommended_id
+                ],
+            ]
+            assignment_source = "assignment_ai"
+            assignment_reason = str(decision.get("reason") or "")[:1000]
+            assignment_confidence = float(decision["confidence"])
+
+    revalidated: Optional[tuple[dict, dict]] = None
+    selected: Optional[dict] = None
+    expected_hotel_id = request_doc.get("hotelId") or request_doc.get("hotel_id")
+    for candidate in ranked_candidates:
+        candidate_result = await _revalidate_assignment_candidate(
+            request_doc["id"],
+            expected_hotel_id,
+            candidate["staff"]["id"],
+            candidate["context"]["current_workload"],
         )
-    revalidated = await _revalidate_assignment_candidate(
-        request_doc["id"],
-        request_doc.get("hotelId") or request_doc.get("hotel_id"),
-        selected["staff"]["id"],
-        selected["context"]["current_workload"],
-    )
-    if not revalidated:
+        if candidate_result:
+            selected = candidate
+            revalidated = candidate_result
+            break
+    if not revalidated or not selected:
         return None
     staff, current_request = revalidated
+    if assignment_source == "assignment_ai" and staff["id"] != str(
+        decision.get("recommended_staff_id")
+    ):
+        assignment_source = "secure_revalidation_fallback"
+        assignment_reason = "AI adayı revalidation sırasında elendi; güvenli aday seçildi"
+        assignment_confidence = None
     hotel_id = current_request.get("hotelId") or current_request.get("hotel_id")
     timestamp = now_iso()
     assignment_update: Dict[str, Any] = {

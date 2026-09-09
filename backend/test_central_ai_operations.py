@@ -238,7 +238,7 @@ class CentralAiOperationsTest(unittest.TestCase):
             })
         return hotel_id, guest_id, staff_ids
 
-    def test_assignment_candidate_security_and_invalid_ai_id(self) -> None:
+    def test_invalid_ai_id_uses_only_safe_candidate_fallback(self) -> None:
         request_id = f"invalid-ai-{uuid.uuid4().hex}"
         scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
         request_doc = {
@@ -282,10 +282,12 @@ class CentralAiOperationsTest(unittest.TestCase):
 
         candidate_ids, selected = asyncio.run(run_checks())
         self.assertEqual(candidate_ids, [self.staff_id])
-        self.assertIsNone(selected)
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["id"], self.staff_id)
         stored = self.database.requests.find_one({"id": request_id})
-        self.assertEqual(stored["status"], "ALINDI")
-        self.assertIsNone(stored.get("assigned_staff_id"))
+        self.assertEqual(stored["status"], "PERSONEL_GIDIYOR")
+        self.assertEqual(stored.get("assigned_staff_id"), self.staff_id)
+        self.assertEqual(stored.get("assignment_source"), "secure_ai_invalid_fallback")
 
     def test_full_guest_staff_operations_flow(self) -> None:
         status_code, created = self.request(
@@ -650,6 +652,18 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertEqual(task_c["hotel_id"], hotel_c)
         self.assertEqual(task_c["assigned_staff_id"], staff_c["Personel F"])
         self.assertNotIn(task_c["assigned_staff_id"], set(staff_b.values()))
+
+    def test_hotel_local_time_comes_from_tenant_record(self) -> None:
+        hotel_id, _, _ = self.seed_tenant(
+            "timezone", "88", "1",
+            [("Timezone Staff", "1. kat", "1-100 numaralı odalar")],
+        )
+        self.database.hotels.update_one(
+            {"id": hotel_id},
+            {"$set": {"timezone": "Pacific/Auckland"}},
+        )
+        local_now = asyncio.run(server.hotel_local_now_for(hotel_id))
+        self.assertEqual(str(local_now.tzinfo), "Pacific/Auckland")
 
     def test_supported_operation_types_and_internal_issue_isolation(self) -> None:
         cases = (
