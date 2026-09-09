@@ -2694,11 +2694,13 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
     if is_staff_task_list_query(message):
         if not assigned:
             return "Şu anda size atanmış aktif bir görev bulunmuyor."
-        schedule_summary = _task_summary(schedules)
-        return (
-            f"Size atanmış {len(assigned)} aktif görev var: {_task_summary(assigned)}. "
-            f"Bugünkü vardiya planınız: {schedule_summary}."
+        reply = (
+            f"Size atanmış {len(assigned)} aktif görev var: "
+            f"{_task_summary(assigned)}."
         )
+        if "bugun" in normalized or "vardiya" in normalized:
+            reply += f" Bugünkü vardiya planınız: {_task_summary(schedules)}."
+        return reply
     if any(phrase in normalized for phrase in (
         "hangi bolum", "neden sorumluyum", "sorumluluk alanim",
         "calisma alanim", "gorev alanim",
