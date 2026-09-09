@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, Modal, Platform,
+  View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, Modal, Platform, Alert,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -62,13 +62,12 @@ export default function StaffActive() {
     }
   };
 
-  const confirmSubmit = async () => {
-    if (!proofModal.item || !proofModal.photo) return;
-    const id = proofModal.item.id;
+  const submitCompletion = async (item: RequestItem, photo?: string) => {
+    const id = item.id;
     setBusyId(id);
     setSubmitError(null);
     try {
-      await api.complete(id, proofModal.photo);
+      await api.complete(id, photo);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setProofModal({ open: false });
       await load();
@@ -79,13 +78,29 @@ export default function StaffActive() {
     }
   };
 
+  const confirmSubmit = async () => {
+    if (!proofModal.item || !proofModal.photo) return;
+    await submitCompletion(proofModal.item, proofModal.photo);
+  };
+
+  const completeWithoutPhoto = (item: RequestItem) => {
+    Alert.alert(
+      "Görev tamamlansın mı?",
+      "Kanıt fotoğrafı eklemeden bu görevi tamamlayabilirsiniz.",
+      [
+        { text: "Vazgeç", style: "cancel" },
+        { text: "Tamamla", onPress: () => submitCompletion(item) },
+      ],
+    );
+  };
+
   if (items === null) return <SafeAreaView style={s.root}><ActivityIndicator color={COLORS.brand} style={{ flex: 1 }} /></SafeAreaView>;
 
   return (
     <SafeAreaView style={s.root} edges={["top"]} testID="staff-active-screen">
       <View style={s.header}>
         <Text style={s.title}>Aktif İşler</Text>
-        <Text style={s.sub}>Tamamlamadan önce kanıt fotoğrafı çekin</Text>
+        <Text style={s.sub}>Görevi doğrudan veya isteğe bağlı kanıt fotoğrafıyla tamamlayın</Text>
       </View>
       <FlatList
         data={items}
@@ -104,15 +119,28 @@ export default function StaffActive() {
             <Text style={s.taskTitle}>{item.hizmet_turu}</Text>
             <Text style={s.guest}>Misafir: {item.guest_name}</Text>
             {!!item.detay && <Text style={s.detail}>{item.detay}</Text>}
-            <Pressable
-              testID={`complete-${item.id}`}
-              onPress={() => openProofFlow(item)}
-              disabled={busyId === item.id}
-              style={({ pressed }) => [s.btn, s.btnComplete, pressed && { opacity: 0.85 }]}
-            >
-              <Ionicons name="camera" size={18} color={COLORS.onBrandPrimary} />
-              <Text style={s.btnText}>Fotoğraf Çek & Tamamla</Text>
-            </Pressable>
+            <View style={s.completeActions}>
+              <Pressable
+                testID={`complete-${item.id}`}
+                onPress={() => completeWithoutPhoto(item)}
+                disabled={busyId === item.id}
+                style={({ pressed }) => [s.btn, s.btnComplete, s.completeButton, pressed && { opacity: 0.85 }]}
+              >
+                {busyId === item.id
+                  ? <ActivityIndicator color={COLORS.onBrandPrimary} />
+                  : <Ionicons name="checkmark-circle" size={18} color={COLORS.onBrandPrimary} />}
+                <Text style={s.btnText}>Tamamla</Text>
+              </Pressable>
+              <Pressable
+                testID={`complete-with-photo-${item.id}`}
+                onPress={() => openProofFlow(item)}
+                disabled={busyId === item.id}
+                style={({ pressed }) => [s.btn, s.btnPhoto, s.completeButton, pressed && { opacity: 0.85 }]}
+              >
+                <Ionicons name="camera" size={18} color={COLORS.brand} />
+                <Text style={s.btnPhotoText}>Fotoğraf Ekle</Text>
+              </Pressable>
+            </View>
           </View>
         )}
       />
@@ -173,6 +201,10 @@ const s = StyleSheet.create({
   detail: { color: COLORS.onSurfaceSecondary, fontSize: 13, lineHeight: 19 },
   btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: SPACING.sm, paddingVertical: SPACING.md, borderRadius: RADIUS.md, marginTop: SPACING.sm },
   btnComplete: { backgroundColor: COLORS.brand },
+  btnPhoto: { backgroundColor: COLORS.surfaceTertiary, borderWidth: 1, borderColor: COLORS.brand },
+  btnPhotoText: { color: COLORS.brand, fontWeight: "700", fontSize: 14 },
+  completeActions: { flexDirection: "row", gap: SPACING.sm },
+  completeButton: { flex: 1 },
   btnText: { color: COLORS.onBrandPrimary, fontWeight: "700", fontSize: 15 },
   empty: { padding: SPACING.xl2, alignItems: "center", gap: SPACING.sm },
   emptyTitle: { color: COLORS.onSurface, fontSize: 18, fontFamily: TYPE.display },

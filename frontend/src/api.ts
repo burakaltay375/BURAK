@@ -185,7 +185,7 @@ export type RequestItem = {
   proof_photo?: string | null;
   completed_at?: string | null;
   operational_note?: string | null;
-  completed_via?: "staff_ai" | "proof_photo" | null;
+  completed_via?: "staff_ai" | "proof_photo" | "staff_ui" | null;
   issue_status?: "OPEN" | null;
   created_at: string; updated_at: string;
 };
@@ -436,10 +436,10 @@ export const api = {
     request<Room>(`/staff/rooms/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
   accept: (id: string) => request<RequestItem>(`/requests/${id}/accept`, { method: "POST" }),
   reject: (id: string) => request<RequestItem>(`/requests/${id}/reject`, { method: "POST" }),
-  complete: (id: string, proof_photo: string) =>
+  complete: (id: string, proof_photo?: string) =>
     request<RequestItem>(`/requests/${id}/complete`, {
       method: "POST",
-      body: JSON.stringify({ proof_photo }),
+      body: JSON.stringify(proof_photo ? { proof_photo } : {}),
     }),
   adminAll: () => request<RequestItem[]>("/admin/requests"),
   adminStats: () => request<{

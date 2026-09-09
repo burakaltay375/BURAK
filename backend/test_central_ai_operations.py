@@ -380,6 +380,35 @@ class CentralAiOperationsTest(unittest.TestCase):
         )
         self.assertEqual(forbidden_code, 403)
 
+    def test_staff_can_complete_without_optional_photo(self) -> None:
+        request_id = f"no-proof-{uuid.uuid4().hex}"
+        scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
+        self.database.requests.insert_one({
+            "id": request_id,
+            "guest_id": self.guest_id,
+            "guest_name": "Guest 204",
+            "room_no": "204",
+            "departman": "housekeeping",
+            "hizmet_turu": "Housekeeping",
+            "zaman": "Şimdi",
+            "detay": "Fotoğrafsız tamamlama testi",
+            "oncelik": "ORTA",
+            "status": "PERSONEL_GIDIYOR",
+            "assigned_staff_id": self.staff_id,
+            "assigned_staff_name": "melih",
+            "created_at": server.now_iso(),
+            "updated_at": server.now_iso(),
+            **scope,
+        })
+        status_code, response = self.request(
+            "POST", f"/api/requests/{request_id}/complete", self.staff_id, {},
+        )
+        self.assertEqual(status_code, 200, response)
+        stored = self.database.requests.find_one({"id": request_id})
+        self.assertEqual(stored["status"], "TAMAMLANDI")
+        self.assertEqual(stored["completed_via"], "staff_ui")
+        self.assertNotIn("proof_photo", stored)
+
     def test_general_multi_turn_guest_operational_state(self) -> None:
         cases = (
             ("Ek havlu istiyorum.", "204", "housekeeping", None),

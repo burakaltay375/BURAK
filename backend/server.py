@@ -354,7 +354,7 @@ class ManagerRequestOut(RequestOut):
     issue_status: Optional[str] = None
 
 class CompleteIn(BaseModel):
-    proof_photo: str  # base64 data URI or raw base64
+    proof_photo: Optional[str] = None  # Optional base64 data URI or raw base64
 
 # --- Check-in ---
 class CheckinIn(BaseModel):
@@ -4351,21 +4351,21 @@ async def complete_request(req_id: str, body: CompleteIn, u: dict = Depends(get_
     if r["status"] != "PERSONEL_GIDIYOR":
         raise HTTPException(400, "Görev aktif değil")
     proof = (body.proof_photo or "").strip()
-    if not proof:
-        raise HTTPException(400, "Kanıt fotoğrafı zorunludur")
-    # Normalize to data URI if raw base64
-    if not proof.startswith("data:"):
-        proof = f"data:image/jpeg;base64,{proof}"
-    if len(proof) > 8 * 1024 * 1024:
-        raise HTTPException(400, "Fotoğraf çok büyük (maks 8MB)")
+    if proof:
+        # Normalize to data URI if raw base64
+        if not proof.startswith("data:"):
+            proof = f"data:image/jpeg;base64,{proof}"
+        if len(proof) > 8 * 1024 * 1024:
+            raise HTTPException(400, "Fotoğraf çok büyük (maks 8MB)")
     timestamp = now_iso()
     update = {
         "status": "TAMAMLANDI",
         "updated_at": timestamp,
         "completed_at": timestamp,
-        "proof_photo": proof,
-        "completed_via": "proof_photo",
+        "completed_via": "proof_photo" if proof else "staff_ui",
     }
+    if proof:
+        update["proof_photo"] = proof
     await db.requests.update_one(
         with_hotel_scope(u, {
             "id": req_id,
