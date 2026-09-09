@@ -312,6 +312,13 @@ class CentralAiOperationsTest(unittest.TestCase):
             {"message": "Bugün görevlerim neler?"},
         )
         self.assertIn("204", tasks["reply"])
+        for task_question in ("görevim varmı", "görev varmı yokmu"):
+            _, task_answer = self.request(
+                "POST", "/api/chat", self.staff_id,
+                {"message": task_question},
+            )
+            self.assertIn("1 aktif görev var", task_answer["reply"])
+            self.assertIn("204", task_answer["reply"])
 
         _, room_info = self.request(
             "POST", "/api/chat", self.staff_id,

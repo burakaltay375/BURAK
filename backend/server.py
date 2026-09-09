@@ -2598,6 +2598,16 @@ def _task_summary(tasks: List[dict]) -> str:
     )
 
 
+def is_staff_task_list_query(message: str) -> bool:
+    normalized = normalize_assignment_text(message)
+    if "gorev" not in normalized:
+        return False
+    return any(marker in normalized for marker in (
+        "var mi", "varmi", "yok mu", "yokmu", "bugun", "atan",
+        "goster", "neler", "nedir", "list",
+    ))
+
+
 async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
     role = role_of(user)
     hotel_id = user_hotel_id(user)
@@ -2681,12 +2691,12 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
             if assigned
             else "Şu anda size atanmış aktif bir görev bulunmuyor."
         )
-    if "gorev" in normalized and any(
-        word in normalized for word in ("bugun", "atan", "goster", "nedir")
-    ):
+    if is_staff_task_list_query(message):
+        if not assigned:
+            return "Şu anda size atanmış aktif bir görev bulunmuyor."
         schedule_summary = _task_summary(schedules)
         return (
-            f"Size atanmış aktif görevler: {_task_summary(assigned)}. "
+            f"Size atanmış {len(assigned)} aktif görev var: {_task_summary(assigned)}. "
             f"Bugünkü vardiya planınız: {schedule_summary}."
         )
     if any(phrase in normalized for phrase in (
@@ -2891,6 +2901,12 @@ async def orchestrate_authenticated_role(
         room_reply = await staff_task_reply_for_room(user, message)
         if room_reply:
             return {"reply": room_reply, "ready": False, "request": None}
+        if is_staff_task_list_query(message):
+            return {
+                "reply": staff_operational_fallback(message, context),
+                "ready": False,
+                "request": None,
+            }
     prompt = {
         "staff": STAFF_AI_SYSTEM_PROMPT,
         "hotel_manager": MANAGER_AI_SYSTEM_PROMPT,
