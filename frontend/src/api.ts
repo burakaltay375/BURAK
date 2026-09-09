@@ -149,7 +149,11 @@ export type DepartmentSchedule = {
   start_time: string;
   end_time: string;
   task: string;
-  status: "Draft" | "Approved";
+  status: "Draft" | "Approved" | "Cancelled" | "Completed" | "PLANLANDI" | "ONAYLANDI" | "IPTAL" | "TAMAMLANDI";
+  note?: string | null;
+  recurrence_group_id?: string | null;
+  repeat_weekdays?: number[];
+  repeat_until?: string | null;
   approved_by?: string | null;
   approved_at?: string | null;
   created_by: string;
@@ -163,7 +167,11 @@ export type DepartmentScheduleInput = {
   date: string;
   start_time: string;
   end_time: string;
-  task: string;
+  task?: string;
+  status?: DepartmentSchedule["status"];
+  note?: string;
+  repeat_weekdays?: number[];
+  repeat_until?: string;
 };
 
 export type RequestItem = {

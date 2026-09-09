@@ -202,6 +202,7 @@ SERVICE_KEYWORDS = {
 }
 
 STATUS_FLOW = ["ALINDI", "PERSONEL_GIDIYOR", "TAMAMLANDI"]
+ACTIVE_REQUEST_STATUSES = ("PERSONEL_GIDIYOR",)
 SYSTEM_ADMIN_EMAIL = os.environ.get("SYSTEM_ADMIN_EMAIL", "burakaltay3004@gmail.com").lower().strip()
 LEGACY_SYSTEM_ADMIN_EMAIL = "burakaltay3004"
 SYSTEM_ADMIN_PASSWORD_FROM_ENV = "SYSTEM_ADMIN_PASSWORD" in os.environ
@@ -368,6 +369,7 @@ class HotelCreateIn(BaseModel):
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     reservation_url: Optional[str] = None
+    timezone: str = HOTEL_TIMEZONE_NAME
     active: bool = True
 
 class HotelOut(BaseModel):
@@ -378,6 +380,7 @@ class HotelOut(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     reservation_url: Optional[str] = None
+    timezone: str = HOTEL_TIMEZONE_NAME
     active: bool = True
     manager_id: Optional[str] = None
     services: Dict[str, bool] = Field(default_factory=dict)
@@ -393,6 +396,7 @@ class HotelUpdateIn(BaseModel):
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     reservation_url: Optional[str] = None
+    timezone: Optional[str] = None
     active: Optional[bool] = None
     services: Optional[Dict[str, bool]] = None
 
@@ -624,7 +628,10 @@ class UserAdminOut(BaseModel):
     active: bool = True
 
 
-ScheduleStatus = Literal["Draft", "Approved"]
+ScheduleStatus = Literal[
+    "Draft", "Approved", "Cancelled", "Completed",
+    "PLANLANDI", "ONAYLANDI", "IPTAL", "TAMAMLANDI",
+]
 
 
 class DepartmentScheduleIn(BaseModel):
@@ -633,7 +640,11 @@ class DepartmentScheduleIn(BaseModel):
     date: str
     start_time: str
     end_time: str
-    task: str
+    task: str = "Vardiya"
+    status: ScheduleStatus = "Draft"
+    note: Optional[str] = None
+    repeat_weekdays: List[int] = Field(default_factory=list)
+    repeat_until: Optional[str] = None
 
 
 class DepartmentScheduleUpdateIn(BaseModel):
@@ -643,6 +654,8 @@ class DepartmentScheduleUpdateIn(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     task: Optional[str] = None
+    status: Optional[ScheduleStatus] = None
+    note: Optional[str] = None
 
 
 class DepartmentScheduleOut(BaseModel):
@@ -656,6 +669,10 @@ class DepartmentScheduleOut(BaseModel):
     end_time: str
     task: str
     status: ScheduleStatus
+    note: Optional[str] = None
+    recurrence_group_id: Optional[str] = None
+    repeat_weekdays: List[int] = Field(default_factory=list)
+    repeat_until: Optional[str] = None
     approved_by: Optional[str] = None
     approved_at: Optional[str] = None
     created_by: str
@@ -1126,6 +1143,7 @@ def public_hotel(h: dict) -> "HotelOut":
         id=h["id"], hotel_name=h["hotel_name"], city=h["city"],
         address=h.get("address"), latitude=h.get("latitude"), longitude=h.get("longitude"),
         reservation_url=h.get("reservation_url"),
+        timezone=h.get("timezone") or HOTEL_TIMEZONE_NAME,
         active=h.get("active", True),
         manager_id=h.get("manager_id"), services=normalize_services(h.get("services")),
         logo_url=f"/api/hotels/{h['id']}/branding/logo?v={logo.get('updated_at')}" if logo else None,
@@ -1141,6 +1159,13 @@ def validate_hotel_reservation_settings(update: dict) -> dict:
         if not url.lower().startswith("https://"):
             raise HTTPException(400, "Resmi rezervasyon bağlantısı HTTPS olmalı")
         update["reservation_url"] = url
+    if update.get("timezone"):
+        timezone_name = str(update["timezone"]).strip()
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise HTTPException(400, "Geçersiz IANA timezone") from exc
+        update["timezone"] = timezone_name
     return update
 
 
@@ -2006,18 +2031,87 @@ def validate_schedule_values(date: str, start_time: str, end_time: str, task: st
         datetime.strptime(end_time, "%H:%M")
     except ValueError:
         raise HTTPException(400, "Tarih YYYY-MM-DD, saatler HH:MM formatında olmalıdır")
-    if end_time <= start_time:
-        raise HTTPException(400, "Bitiş saati başlangıç saatinden sonra olmalıdır")
+    if end_time == start_time:
+        raise HTTPException(400, "Başlangıç ve bitiş saati aynı olamaz")
     if not task.strip():
         raise HTTPException(400, "Görev alanı zorunludur")
 
 
+def normalize_schedule_status(value: Any) -> ScheduleStatus:
+    normalized = normalize_assignment_text(str(value or "Draft")).upper()
+    aliases: Dict[str, ScheduleStatus] = {
+        "DRAFT": "Draft",
+        "PLANLANDI": "PLANLANDI",
+        "APPROVED": "Approved",
+        "ONAYLANDI": "ONAYLANDI",
+        "CANCELLED": "Cancelled",
+        "CANCELED": "Cancelled",
+        "IPTAL": "IPTAL",
+        "COMPLETED": "Completed",
+        "TAMAMLANDI": "TAMAMLANDI",
+    }
+    return aliases.get(normalized, "Draft")
+
+
+def schedule_is_approved(schedule: dict) -> bool:
+    return normalize_schedule_status(schedule.get("status")) in ("Approved", "ONAYLANDI")
+
+
+def schedule_time_bounds(date: str, start_time: str, end_time: str) -> tuple[datetime, datetime]:
+    start = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
+    end = datetime.strptime(f"{date} {end_time}", "%Y-%m-%d %H:%M")
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def schedules_overlap(
+    date_a: str, start_a: str, end_a: str,
+    date_b: str, start_b: str, end_b: str,
+) -> bool:
+    start_one, end_one = schedule_time_bounds(date_a, start_a, end_a)
+    start_two, end_two = schedule_time_bounds(date_b, start_b, end_b)
+    return start_one < end_two and start_two < end_one
+
+
+def recurring_schedule_dates(
+    start_date: str,
+    repeat_weekdays: List[int],
+    repeat_until: Optional[str],
+) -> List[str]:
+    first = datetime.strptime(start_date, "%Y-%m-%d").date()
+    if not repeat_weekdays:
+        return [first.isoformat()]
+    if repeat_until is None:
+        raise HTTPException(400, "Tekrarlayan vardiya için bitiş tarihi gerekli")
+    try:
+        last = datetime.strptime(repeat_until, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(400, "Tekrar bitiş tarihi YYYY-MM-DD formatında olmalıdır") from exc
+    if last < first or (last - first).days > 366:
+        raise HTTPException(400, "Tekrar aralığı başlangıçtan itibaren en fazla 366 gün olabilir")
+    weekdays = set(repeat_weekdays)
+    if not weekdays or any(day < 0 or day > 6 for day in weekdays):
+        raise HTTPException(400, "Tekrar günleri 0-6 arasında olmalıdır")
+    dates: List[str] = []
+    current = first
+    while current <= last:
+        if current.weekday() in weekdays:
+            dates.append(current.isoformat())
+        current += timedelta(days=1)
+    if not dates:
+        raise HTTPException(400, "Seçilen aralıkta tekrar günü bulunamadı")
+    return dates
+
+
 def public_department_schedule(doc: dict) -> dict:
-    status_value = doc.get("status")
     return {
         **doc,
         "task": doc.get("task") or doc.get("shift") or "Vardiya",
-        "status": status_value if status_value in ("Draft", "Approved") else "Draft",
+        "status": normalize_schedule_status(doc.get("status")),
+        "note": doc.get("note"),
+        "repeat_weekdays": list(doc.get("repeat_weekdays") or []),
+        "repeat_until": doc.get("repeat_until"),
         "created_by": doc.get("created_by") or "seed",
         "created_at": doc.get("created_at") or now_iso(),
         "updated_at": doc.get("updated_at") or doc.get("created_at") or now_iso(),
@@ -2608,15 +2702,65 @@ def is_staff_task_list_query(message: str) -> bool:
     ))
 
 
+def staff_shift_query_period(message: str) -> Optional[str]:
+    normalized = normalize_assignment_text(message)
+    if "vardiya" not in normalized:
+        return None
+    if any(marker in normalized for marker in ("su an", "simdi", "vardiyada miyim")):
+        return "current"
+    if "yarin" in normalized:
+        return "tomorrow"
+    if any(marker in normalized for marker in ("bu hafta", "haftalik", "haftaki")):
+        return "week"
+    return "today"
+
+
+def _shift_summary(schedules: List[dict]) -> str:
+    if not schedules:
+        return "Yok"
+    return "; ".join(
+        f"{schedule.get('date')} {schedule.get('start_time')}–{schedule.get('end_time')}"
+        f" ({normalize_schedule_status(schedule.get('status'))})"
+        f"{f': {schedule.get('note')}' if schedule.get('note') else ''}"
+        for schedule in schedules[:14]
+    )
+
+
+def staff_shift_reply(message: str, context: Dict[str, Any]) -> Optional[str]:
+    period = staff_shift_query_period(message)
+    if not period:
+        return None
+    if period == "current":
+        current = context.get("current_shift")
+        if not current:
+            return "Şu anda onaylı aktif bir vardiyada değilsiniz."
+        return (
+            f"Şu anda vardiyadasınız: {current.get('start_time')}–"
+            f"{current.get('end_time')} ({normalize_schedule_status(current.get('status'))})."
+        )
+    if period == "tomorrow":
+        schedules = context.get("tomorrow_schedules") or []
+        return f"Yarınki vardiya planınız: {_shift_summary(schedules)}."
+    if period == "week":
+        schedules = context.get("week_schedules") or []
+        return f"Bu haftaki vardiya planınız: {_shift_summary(schedules)}."
+    schedules = context.get("today_schedules") or []
+    return f"Bugünkü vardiya planınız: {_shift_summary(schedules)}."
+
+
 async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
     role = role_of(user)
     hotel_id = user_hotel_id(user)
     if role == "staff":
-        today = hotel_local_now().date().isoformat()
+        local_now = await hotel_local_now_for(hotel_id)
+        today_date = local_now.date()
+        today = today_date.isoformat()
+        tomorrow = (today_date + timedelta(days=1)).isoformat()
+        week_end = (today_date + timedelta(days=6)).isoformat()
         assigned = await db.requests.find(
             with_hotel_scope(user, {
                 "assigned_staff_id": user["id"],
-                "status": "PERSONEL_GIDIYOR",
+                "status": {"$in": list(ACTIVE_REQUEST_STATUSES)},
             }),
             {"_id": 0},
         ).sort("updated_at", -1).to_list(50)
@@ -2631,24 +2775,40 @@ async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
             task for task in pending
             if staff_request_scope_compatibility(user, task)[0]
         ]
-        schedules = await db.staff_schedules.find(
+        week_schedules = await db.staff_schedules.find(
             with_hotel_scope(user, {
                 "employee_id": user["id"],
-                "date": today,
+                "date": {"$gte": today, "$lte": week_end},
             }),
             {"_id": 0},
         ).sort("start_time", 1).to_list(50)
+        today_schedules = [
+            schedule for schedule in week_schedules
+            if schedule.get("date") == today
+            and normalize_schedule_status(schedule.get("status")) not in ("Cancelled", "IPTAL")
+        ]
+        tomorrow_schedules = [
+            schedule for schedule in week_schedules
+            if schedule.get("date") == tomorrow
+            and normalize_schedule_status(schedule.get("status")) not in ("Cancelled", "IPTAL")
+        ]
+        current_shifts = await _active_staff_shifts(user, local_now)
         return {
             "authenticated_role": "staff",
+            "staff_id": user["id"],
+            "hotel_id": hotel_id,
             "name": user.get("name"),
             "position": user.get("position"),
             "department": DEPARTMENTS.get(user.get("department"), user.get("department")),
             "work_area": user.get("work_area"),
             "responsibility_description": user.get("responsibility_description"),
             "date": today,
+            "current_shift": current_shifts[0] if current_shifts else None,
             "assigned_tasks": assigned,
             "eligible_pending_tasks": pending,
-            "today_schedules": schedules,
+            "today_schedules": today_schedules,
+            "tomorrow_schedules": tomorrow_schedules,
+            "week_schedules": week_schedules,
         }
     if role == "hotel_manager":
         scope = {"$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}]}
@@ -2699,7 +2859,7 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
             f"{_task_summary(assigned)}."
         )
         if "bugun" in normalized or "vardiya" in normalized:
-            reply += f" Bugünkü vardiya planınız: {_task_summary(schedules)}."
+            reply += f" Bugünkü vardiya planınız: {_shift_summary(schedules)}."
         return reply
     if any(phrase in normalized for phrase in (
         "hangi bolum", "neden sorumluyum", "sorumluluk alanim",
@@ -2712,8 +2872,9 @@ def staff_operational_fallback(message: str, context: Dict[str, Any]) -> str:
             f"Sorumluluk tanımınız: "
             f"{context.get('responsibility_description') or 'Manager tarafından henüz tanımlanmamış'}."
         )
-    if "vardiya" in normalized:
-        return f"Bugünkü vardiya planınız: {_task_summary(schedules)}."
+    shift_reply = staff_shift_reply(message, context)
+    if shift_reply:
+        return shift_reply
     if "bekleyen" in normalized and "gorev" in normalized:
         return f"Çalışma alanınıza uygun bekleyen görevler: {_task_summary(pending)}."
     return (
@@ -2909,6 +3070,9 @@ async def orchestrate_authenticated_role(
                 "ready": False,
                 "request": None,
             }
+        shift_reply = staff_shift_reply(message, context)
+        if shift_reply:
+            return {"reply": shift_reply, "ready": False, "request": None}
     prompt = {
         "staff": STAFF_AI_SYSTEM_PROMPT,
         "hotel_manager": MANAGER_AI_SYSTEM_PROMPT,
@@ -3317,6 +3481,18 @@ def hotel_local_now() -> datetime:
     return datetime.now(HOTEL_TIMEZONE)
 
 
+async def hotel_local_now_for(hotel_id: Optional[str]) -> datetime:
+    timezone_name = HOTEL_TIMEZONE_NAME
+    if hotel_id:
+        hotel = await db.hotels.find_one({"id": hotel_id}, {"_id": 0, "timezone": 1})
+        timezone_name = str((hotel or {}).get("timezone") or HOTEL_TIMEZONE_NAME)
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except ZoneInfoNotFoundError:
+        logger.warning("Hotel %s has invalid timezone %s; using %s", hotel_id, timezone_name, HOTEL_TIMEZONE_NAME)
+        return hotel_local_now()
+
+
 def _schedule_covers_local_time(schedule: dict, current: datetime) -> bool:
     try:
         schedule_date = datetime.strptime(schedule["date"], "%Y-%m-%d").date()
@@ -3345,7 +3521,8 @@ async def _active_staff_shifts(
     staff: dict,
     current: Optional[datetime] = None,
 ) -> List[dict]:
-    now = current or hotel_local_now()
+    hotel_id = staff.get("hotelId") or staff.get("hotel_id")
+    now = current or await hotel_local_now_for(hotel_id)
     relevant_dates = [
         now.date().isoformat(),
         (now.date() - timedelta(days=1)).isoformat(),
@@ -3354,14 +3531,14 @@ async def _active_staff_shifts(
         with_hotel_scope(staff, {
             "employee_id": staff["id"],
             "date": {"$in": relevant_dates},
-            "status": "Approved",
         }),
         {"_id": 0},
     ).to_list(50)
     return [
         schedule
         for schedule in schedules
-        if _schedule_covers_local_time(schedule, now)
+        if schedule_is_approved(schedule)
+        and _schedule_covers_local_time(schedule, now)
     ]
 
 
@@ -3414,7 +3591,7 @@ async def _safe_assignment_candidates(request_doc: dict) -> List[dict]:
             continue
         task_query = {
             "assigned_staff_id": staff["id"],
-            "status": "PERSONEL_GIDIYOR",
+            "status": {"$in": list(ACTIVE_REQUEST_STATUSES)},
             "$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}],
         }
         workload = await db.requests.count_documents(task_query)
@@ -3560,7 +3737,7 @@ async def _revalidate_assignment_candidate(
         return None
     current_workload = await db.requests.count_documents({
         "assigned_staff_id": staff_id,
-        "status": "PERSONEL_GIDIYOR",
+        "status": {"$in": list(ACTIVE_REQUEST_STATUSES)},
         "$or": [{"hotel_id": hotel_id}, {"hotelId": hotel_id}],
     })
     if current_workload != expected_workload:
@@ -4349,6 +4526,7 @@ async def system_create_hotel(
     latitude: Optional[float] = Form(None),
     longitude: Optional[float] = Form(None),
     reservation_url: Optional[str] = Form(None),
+    timezone_name: str = Form(HOTEL_TIMEZONE_NAME, alias="timezone"),
     active: bool = Form(True),
     intro_video: Optional[UploadFile] = File(None),
     u: dict = Depends(get_current_user),
@@ -4364,6 +4542,7 @@ async def system_create_hotel(
         "latitude": latitude,
         "longitude": longitude,
         "reservation_url": reservation_url.strip() if reservation_url else None,
+        "timezone": timezone_name.strip(),
         "active": active,
         "manager_id": None,
         "services": default_services(),
@@ -4612,7 +4791,7 @@ async def manager_update_hotel(body: HotelUpdateIn, u: dict = Depends(get_curren
         k: v for k, v in body.model_dump(exclude_unset=True).items()
         if v is not None and k in {
             "hotel_name", "city", "address", "latitude", "longitude", "services",
-            "reservation_url",
+            "reservation_url", "timezone",
         }
     }
     validate_hotel_reservation_settings(update)
@@ -4823,6 +5002,36 @@ async def list_department_schedules(
     return [public_department_schedule(doc) for doc in docs]
 
 
+async def ensure_no_schedule_conflict(
+    user: dict,
+    employee_id: str,
+    date: str,
+    start_time: str,
+    end_time: str,
+    exclude_id: Optional[str] = None,
+) -> None:
+    base_date = datetime.strptime(date, "%Y-%m-%d").date()
+    relevant_dates = [
+        (base_date + timedelta(days=offset)).isoformat()
+        for offset in (-1, 0, 1)
+    ]
+    query: Dict[str, Any] = with_hotel_scope(user, {
+        "employee_id": employee_id,
+        "date": {"$in": relevant_dates},
+    })
+    if exclude_id:
+        query["id"] = {"$ne": exclude_id}
+    existing = await db.staff_schedules.find(query, {"_id": 0}).to_list(100)
+    for schedule in existing:
+        if normalize_schedule_status(schedule.get("status")) in ("Cancelled", "IPTAL"):
+            continue
+        if schedules_overlap(
+            date, start_time, end_time,
+            schedule["date"], schedule["start_time"], schedule["end_time"],
+        ):
+            raise HTTPException(409, "Personelin bu saatlerle çakışan başka bir planı var")
+
+
 @api.post("/planning", response_model=DepartmentScheduleOut)
 async def create_department_schedule(body: DepartmentScheduleIn, u: dict = Depends(get_current_user)):
     initial_department = planning_department(u, body.department, require_edit=True)
@@ -4838,41 +5047,49 @@ async def create_department_schedule(body: DepartmentScheduleIn, u: dict = Depen
         department = employee_doc["department"]
         planning_department(u, department, require_edit=True)
     employee = await planning_employee(u, body.employee_id, department)
-    validate_schedule_values(body.date, body.start_time, body.end_time, body.task)
-    ensure_staff_request_scope(employee, {
-        "departman": department,
-        "room_no": "",
-        "hizmet_turu": body.task,
-        "detay": body.task,
-    })
-    conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
-        "employee_id": body.employee_id,
-        "date": body.date,
-        "start_time": {"$lt": body.end_time},
-        "end_time": {"$gt": body.start_time},
-    }), {"_id": 0})
-    if conflict:
-        raise HTTPException(409, "Personelin bu saatlerle çakışan başka bir planı var")
+    task = body.task.strip() or "Vardiya"
+    validate_schedule_values(body.date, body.start_time, body.end_time, task)
+    status = normalize_schedule_status(body.status)
+    if schedule_is_approved({"status": status}) and role_of(u) != "hotel_manager":
+        raise HTTPException(403, "Vardiyayı yalnızca hotel manager onaylayabilir")
+    dates = recurring_schedule_dates(
+        body.date, body.repeat_weekdays, body.repeat_until
+    )
+    for schedule_date in dates:
+        await ensure_no_schedule_conflict(
+            u, body.employee_id, schedule_date, body.start_time, body.end_time
+        )
     timestamp = now_iso()
-    doc = {
-        "id": str(uuid.uuid4()),
-        "employee_id": employee["id"],
-        "employee_name": employee["name"],
-        "department": department,
-        "position": employee.get("position"),
-        "date": body.date,
-        "start_time": body.start_time,
-        "end_time": body.end_time,
-        "task": body.task.strip(),
-        "status": "Draft",
-        "created_by": u["id"],
-        "created_at": timestamp,
-        "updated_at": timestamp,
-        "hotel_id": user_hotel_id(u),
-        "hotelId": user_hotel_id(u),
-    }
-    await db.staff_schedules.insert_one(doc.copy())
-    return public_department_schedule(doc)
+    recurrence_group_id = str(uuid.uuid4()) if len(dates) > 1 else None
+    docs = []
+    for schedule_date in dates:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "employee_id": employee["id"],
+            "employee_name": employee["name"],
+            "department": department,
+            "position": employee.get("position"),
+            "date": schedule_date,
+            "start_time": body.start_time,
+            "end_time": body.end_time,
+            "task": task,
+            "note": (body.note or "").strip() or None,
+            "status": status,
+            "recurrence_group_id": recurrence_group_id,
+            "repeat_weekdays": sorted(set(body.repeat_weekdays)),
+            "repeat_until": body.repeat_until,
+            "created_by": u["id"],
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "hotel_id": user_hotel_id(u),
+            "hotelId": user_hotel_id(u),
+        }
+        if schedule_is_approved(doc):
+            doc["approved_by"] = u["id"]
+            doc["approved_at"] = timestamp
+        docs.append(doc)
+    await db.staff_schedules.insert_many([doc.copy() for doc in docs])
+    return public_department_schedule(docs[0])
 
 
 @api.patch("/planning/{schedule_id}", response_model=DepartmentScheduleOut)
@@ -4895,22 +5112,16 @@ async def update_department_schedule(
     start_time = body.start_time or current.get("start_time")
     end_time = body.end_time or current.get("end_time")
     task = body.task if body.task is not None else current.get("task") or current.get("shift") or ""
+    task = task.strip() or "Vardiya"
     validate_schedule_values(date, start_time, end_time, task)
-    ensure_staff_request_scope(employee, {
-        "departman": department,
-        "room_no": "",
-        "hizmet_turu": task,
-        "detay": task,
-    })
-    conflict = await db.staff_schedules.find_one(with_hotel_scope(u, {
-        "id": {"$ne": schedule_id},
-        "employee_id": employee_id,
-        "date": date,
-        "start_time": {"$lt": end_time},
-        "end_time": {"$gt": start_time},
-    }), {"_id": 0})
-    if conflict:
-        raise HTTPException(409, "Personelin bu saatlerle çakışan başka bir planı var")
+    await ensure_no_schedule_conflict(
+        u, employee_id, date, start_time, end_time, schedule_id
+    )
+    status = normalize_schedule_status(
+        body.status if body.status is not None else "Draft"
+    )
+    if schedule_is_approved({"status": status}) and role_of(u) != "hotel_manager":
+        raise HTTPException(403, "Vardiyayı yalnızca hotel manager onaylayabilir")
     update = {
         "employee_id": employee["id"],
         "employee_name": employee["name"],
@@ -4920,13 +5131,25 @@ async def update_department_schedule(
         "start_time": start_time,
         "end_time": end_time,
         "task": task.strip(),
-        "status": "Draft",
+        "note": (
+            (body.note or "").strip() or None
+            if body.note is not None else current.get("note")
+        ),
+        "status": status,
         "updated_at": now_iso(),
     }
+    if schedule_is_approved(update):
+        update["approved_by"] = u["id"]
+        update["approved_at"] = now_iso()
     await db.staff_schedules.update_one(
         with_hotel_scope(u, {"id": schedule_id}),
-        {"$set": update, "$unset": {"approved_by": "", "approved_at": ""}},
+        {"$set": update},
     )
+    if not schedule_is_approved(update):
+        await db.staff_schedules.update_one(
+            with_hotel_scope(u, {"id": schedule_id}),
+            {"$unset": {"approved_by": "", "approved_at": ""}},
+        )
     doc = await db.staff_schedules.find_one(with_hotel_scope(u, {"id": schedule_id}), {"_id": 0})
     return public_department_schedule(doc)
 

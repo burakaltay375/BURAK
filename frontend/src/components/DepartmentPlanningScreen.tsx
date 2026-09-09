@@ -17,14 +17,24 @@ type FormState = {
   start_time: string;
   end_time: string;
   task: string;
+  status: DepartmentSchedule["status"];
+  note: string;
+  repeat_weekdays: number[];
+  repeat_until: string;
 };
+
+const WEEKDAYS = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
 
 const emptyForm = (): FormState => ({
   employee_id: "",
   date: today(),
   start_time: "09:00",
   end_time: "17:00",
-  task: "",
+  task: "Vardiya",
+  status: "Draft",
+  note: "",
+  repeat_weekdays: [],
+  repeat_until: "",
 });
 
 export default function DepartmentPlanningScreen({ manager }: Props) {
@@ -81,8 +91,8 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
   };
 
   const save = async () => {
-    if (!form.employee_id || !form.task.trim()) {
-      setError("Personel ve görev alanları zorunludur.");
+    if (!form.employee_id) {
+      setError("Personel seçimi zorunludur.");
       return;
     }
     setBusy("save");
@@ -92,11 +102,12 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
       const payload = {
         ...form,
         task: form.task.trim(),
+        repeat_until: form.repeat_weekdays.length ? form.repeat_until : undefined,
         department: departmentFilter,
       };
       if (editingId) {
         await api.updateSchedule(editingId, payload);
-        setNotice("Plan güncellendi ve yeniden onaya alındı.");
+        setNotice("Vardiya güncellendi.");
       } else {
         await api.createSchedule(payload);
         setNotice("Yeni plan oluşturuldu.");
@@ -118,6 +129,10 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
       start_time: plan.start_time,
       end_time: plan.end_time,
       task: plan.task,
+      status: plan.status,
+      note: plan.note ?? "",
+      repeat_weekdays: [],
+      repeat_until: "",
     });
     setEditingId(plan.id);
     setShowForm(true);
@@ -181,18 +196,18 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
             <Text style={s.cardTitle}>{plan.employee_name}</Text>
             <Text style={s.meta}>{DEPT_LABEL[plan.department] ?? plan.department} · {plan.position || "Personel"}</Text>
           </View>
-          <View style={[s.badge, plan.status === "Approved" ? s.approved : s.draft]}>
-            <Text style={s.badgeText}>{plan.status === "Approved" ? "Onaylandı" : "Taslak"}</Text>
+          <View style={[s.badge, ["Approved", "ONAYLANDI"].includes(plan.status) ? s.approved : s.draft]}>
+            <Text style={s.badgeText}>{["Approved", "ONAYLANDI"].includes(plan.status) ? "Onaylandı" : plan.status}</Text>
           </View>
         </View>
         <Text style={s.time}>{plan.date} · {plan.start_time}–{plan.end_time}{isPast ? " · Geçmiş" : ""}</Text>
-        <Text style={s.task}>{plan.task}</Text>
+        {!!plan.note && <Text style={s.task}>{plan.note}</Text>}
         {canEdit && <View style={s.actions}>
           <Pressable onPress={() => edit(plan)} disabled={busy === plan.id} style={s.secondaryButton}>
               <Ionicons name="create-outline" size={17} color={COLORS.brand} />
               <Text style={s.secondaryText}>Düzenle</Text>
             </Pressable>
-          {manager && plan.status !== "Approved" && (
+          {manager && !["Approved", "ONAYLANDI"].includes(plan.status) && (
             <Pressable onPress={() => approve(plan)} disabled={busy === plan.id} style={s.secondaryButton}>
               <Ionicons name="checkmark-circle-outline" size={17} color={COLORS.success} />
               <Text style={[s.secondaryText, { color: COLORS.success }]}>Onayla</Text>
@@ -213,7 +228,7 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
 
   return (
     <ScrollView style={s.root} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-      <Text style={s.title}>Departman Planlama</Text>
+      <Text style={s.title}>Vardiya Yönetimi</Text>
       <Text style={s.subtitle}>
         {manager
           ? "Tüm departmanların vardiya ve görev planlarını yönetin."
@@ -237,7 +252,7 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
       {canEdit && <View style={s.toolbar}>
         <Pressable onPress={() => { setShowForm(true); setEditingId(null); setForm(emptyForm()); }} style={s.primaryButton}>
           <Ionicons name="add" size={18} color={COLORS.onBrandPrimary} />
-          <Text style={s.primaryText}>Yeni Plan</Text>
+          <Text style={s.primaryText}>Yeni Vardiya</Text>
         </Pressable>
         <Pressable onPress={exportExcel} disabled={busy === "export"} style={s.exportButton}>
           <Ionicons name="document-outline" size={18} color={COLORS.brand} />
@@ -247,7 +262,7 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
 
       {showForm && (
         <View style={s.form}>
-          <Text style={s.formTitle}>{editingId ? "Planı Düzenle" : "Yeni Plan"}</Text>
+          <Text style={s.formTitle}>{editingId ? "Vardiyayı Düzenle" : "Yeni Vardiya"}</Text>
           <Text style={s.label}>Personel seç</Text>
           <View style={s.chips}>
             {staff.map((employee) => (
@@ -262,7 +277,38 @@ export default function DepartmentPlanningScreen({ manager }: Props) {
             <TextInput value={form.start_time} onChangeText={(start_time) => setForm((current) => ({ ...current, start_time }))} placeholder="Başlangıç (HH:MM)" placeholderTextColor={COLORS.onSurfaceTertiary} style={[s.input, s.flex]} />
             <TextInput value={form.end_time} onChangeText={(end_time) => setForm((current) => ({ ...current, end_time }))} placeholder="Bitiş (HH:MM)" placeholderTextColor={COLORS.onSurfaceTertiary} style={[s.input, s.flex]} />
           </View>
-          <TextInput value={form.task} onChangeText={(task) => setForm((current) => ({ ...current, task }))} placeholder="Görev" placeholderTextColor={COLORS.onSurfaceTertiary} multiline style={[s.input, s.multiline]} />
+          {manager && <>
+            <Text style={s.label}>Durum</Text>
+            <View style={s.chips}>
+              {([["Draft", "Planlandı"], ["Approved", "Onaylandı"]] as const).map(([value, label]) => (
+                <Pressable key={value} onPress={() => setForm((current) => ({ ...current, status: value }))} style={[s.chip, form.status === value && s.chipActive]}>
+                  <Text style={[s.chipText, form.status === value && s.chipTextActive]}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </>}
+          {!editingId && <>
+            <Text style={s.label}>Tekrarlanan günler (isteğe bağlı)</Text>
+            <View style={s.chips}>
+              {WEEKDAYS.map((label, day) => {
+                const selected = form.repeat_weekdays.includes(day);
+                return (
+                  <Pressable key={day} onPress={() => setForm((current) => ({
+                    ...current,
+                    repeat_weekdays: selected
+                      ? current.repeat_weekdays.filter((value) => value !== day)
+                      : [...current.repeat_weekdays, day],
+                  }))} style={[s.chip, selected && s.chipActive]}>
+                    <Text style={[s.chipText, selected && s.chipTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {!!form.repeat_weekdays.length && (
+              <TextInput value={form.repeat_until} onChangeText={(repeat_until) => setForm((current) => ({ ...current, repeat_until }))} placeholder="Tekrar bitiş tarihi (YYYY-MM-DD)" placeholderTextColor={COLORS.onSurfaceTertiary} style={s.input} />
+            )}
+          </>}
+          <TextInput value={form.note} onChangeText={(note) => setForm((current) => ({ ...current, note }))} placeholder="Vardiya notu (isteğe bağlı)" placeholderTextColor={COLORS.onSurfaceTertiary} multiline style={[s.input, s.multiline]} />
           <View style={s.actions}>
             <Pressable onPress={save} disabled={busy === "save"} style={s.primaryButton}><Text style={s.primaryText}>{busy === "save" ? "Kaydediliyor..." : "Kaydet"}</Text></Pressable>
             <Pressable onPress={resetForm} style={s.secondaryButton}><Text style={s.secondaryText}>İptal</Text></Pressable>

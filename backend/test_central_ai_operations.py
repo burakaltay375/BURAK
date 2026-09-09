@@ -541,6 +541,79 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertTrue(server._schedule_covers_local_time(overnight, at_night))
         self.assertTrue(server._schedule_covers_local_time(overnight, after_midnight))
         self.assertFalse(server._schedule_covers_local_time(overnight, after_shift))
+        server.validate_schedule_values("2026-09-08", "22:00", "06:00", "Vardiya")
+        self.assertTrue(server.schedule_is_approved({"status": "ONAYLANDI"}))
+        self.assertFalse(server.schedule_is_approved({"status": "IPTAL"}))
+
+    def test_manager_recurring_overnight_shifts(self) -> None:
+        first = server.hotel_local_now().date() + server.timedelta(days=7)
+        repeat_until = first + server.timedelta(days=14)
+        status_code, created = self.request(
+            "POST", "/api/planning", self.manager_id,
+            {
+                "employee_id": self.no_shift_staff_id,
+                "department": "housekeeping",
+                "date": first.isoformat(),
+                "start_time": "22:00",
+                "end_time": "06:00",
+                "task": "Vardiya",
+                "status": "ONAYLANDI",
+                "note": "Gece vardiyası",
+                "repeat_weekdays": [first.weekday()],
+                "repeat_until": repeat_until.isoformat(),
+            },
+        )
+        self.assertEqual(status_code, 200, created)
+        self.assertEqual(created["status"], "ONAYLANDI")
+        self.assertEqual(created["note"], "Gece vardiyası")
+        self.assertIsNotNone(created["recurrence_group_id"])
+        schedules = list(self.database.staff_schedules.find({
+            "recurrence_group_id": created["recurrence_group_id"],
+        }))
+        self.assertEqual(len(schedules), 3)
+        self.assertTrue(all(item["hotel_id"] == self.hotel_id for item in schedules))
+        self.assertTrue(all(item["employee_id"] == self.no_shift_staff_id for item in schedules))
+
+    def test_staff_ai_shift_queries_use_authenticated_schedule(self) -> None:
+        tomorrow = (
+            server.hotel_local_now().date() + server.timedelta(days=1)
+        ).isoformat()
+        scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
+        self.database.staff_schedules.insert_one({
+            "id": f"tomorrow-{uuid.uuid4().hex}",
+            "employee_id": self.staff_id,
+            "employee_name": "melih",
+            "department": "housekeeping",
+            "date": tomorrow,
+            "start_time": "08:00",
+            "end_time": "16:00",
+            "task": "Vardiya",
+            "note": "Sabah vardiyası",
+            "status": "ONAYLANDI",
+            "created_at": server.now_iso(),
+            "updated_at": server.now_iso(),
+            **scope,
+        })
+        _, today = self.request(
+            "POST", "/api/chat", self.staff_id,
+            {"message": "Bugün vardiyam var mı?"},
+        )
+        self.assertIn("00:00–23:59", today["reply"])
+        _, current = self.request(
+            "POST", "/api/chat", self.staff_id,
+            {"message": "Şu an vardiyada mıyım?"},
+        )
+        self.assertIn("Şu anda vardiyadasınız", current["reply"])
+        _, next_day = self.request(
+            "POST", "/api/chat", self.staff_id,
+            {"message": "Yarın vardiyam kaçta?"},
+        )
+        self.assertIn("08:00–16:00", next_day["reply"])
+        _, week = self.request(
+            "POST", "/api/chat", self.staff_id,
+            {"message": "Bu haftaki vardiyalarım neler?"},
+        )
+        self.assertIn("08:00–16:00", week["reply"])
 
     def test_multi_tenant_dynamic_assignment(self) -> None:
         hotel_b, guest_b, staff_b = self.seed_tenant(
