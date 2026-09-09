@@ -23,6 +23,7 @@ import unicodedata
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import List, Optional, Dict, Any, Literal
 
 import bcrypt
@@ -67,6 +68,14 @@ OSM_USER_AGENT = os.environ.get(
 )
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24 * 7
+HOTEL_TIMEZONE_NAME = os.environ.get("HOTEL_TIMEZONE", "Europe/Istanbul")
+try:
+    HOTEL_TIMEZONE = ZoneInfo(HOTEL_TIMEZONE_NAME)
+except ZoneInfoNotFoundError:
+    logging.getLogger("hotel-ops").warning(
+        "Unknown HOTEL_TIMEZONE=%s; falling back to UTC", HOTEL_TIMEZONE_NAME
+    )
+    HOTEL_TIMEZONE = timezone.utc
 
 # --------------------------------------------------------------------------
 # DB
@@ -1871,6 +1880,48 @@ def staff_request_scope_compatibility(staff: dict, request: dict) -> tuple[bool,
     return True, None
 
 
+def staff_request_scope_is_verifiable(staff: dict, request: dict) -> bool:
+    """Require auto-assignment to be proven by a parsed room/area constraint."""
+    scope = normalize_assignment_text(
+        " ".join(filter(None, (
+            staff.get("work_area"),
+            staff.get("responsibility_description"),
+        )))
+    )
+    if not scope:
+        return False
+    target = normalize_assignment_text(" ".join(filter(None, (
+        str(request.get("room_no") or ""),
+        request.get("room_area"),
+        request.get("hizmet_turu"),
+        request.get("detay"),
+    ))))
+    target_rooms = _extract_target_rooms(request)
+    room_ranges = _extract_room_ranges(scope)
+    if target_rooms and room_ranges:
+        return all(
+            any(start <= room <= end for start, end in room_ranges)
+            for room in target_rooms
+        )
+    scope_blocks = _extract_blocks(scope)
+    target_blocks = _extract_blocks(target)
+    if scope_blocks and target_blocks:
+        return not scope_blocks.isdisjoint(target_blocks)
+    scope_venues = _extract_venues(scope)
+    target_venues = _extract_venues(target)
+    if scope_venues and target_venues:
+        return not scope_venues.isdisjoint(target_venues)
+    table_ranges = _extract_table_ranges(scope)
+    target_tables = {
+        int(table)
+        for table in re.findall(r"\b(?:masa|table)\s*(\d{1,3})\b", target)
+    }
+    return bool(table_ranges and target_tables) and all(
+        any(start <= table <= end for start, end in table_ranges)
+        for table in target_tables
+    )
+
+
 def ensure_staff_request_scope(staff: dict, request: dict) -> None:
     compatible, reason = staff_request_scope_compatibility(staff, request)
     if not compatible:
@@ -2334,7 +2385,7 @@ async def authenticated_operations_context(user: dict) -> Dict[str, Any]:
     role = role_of(user)
     hotel_id = user_hotel_id(user)
     if role == "staff":
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = hotel_local_now().date().isoformat()
         assigned = await db.requests.find(
             with_hotel_scope(user, {
                 "assigned_staff_id": user["id"],
@@ -3027,22 +3078,50 @@ async def validate_guest_request_room(user: dict, requested_room: str) -> dict:
     return room
 
 
+def hotel_local_now() -> datetime:
+    return datetime.now(HOTEL_TIMEZONE)
+
+
+def _schedule_covers_local_time(schedule: dict, current: datetime) -> bool:
+    try:
+        schedule_date = datetime.strptime(schedule["date"], "%Y-%m-%d").date()
+        start_hour, start_minute = map(int, schedule["start_time"].split(":"))
+        end_hour, end_minute = map(int, schedule["end_time"].split(":"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    current_minutes = current.hour * 60 + current.minute
+    start_minutes = start_hour * 60 + start_minute
+    end_minutes = end_hour * 60 + end_minute
+    if start_minutes <= end_minutes:
+        return (
+            schedule_date == current.date()
+            and start_minutes <= current_minutes <= end_minutes
+        )
+    return (
+        (schedule_date == current.date() and current_minutes >= start_minutes)
+        or (
+            schedule_date == current.date() - timedelta(days=1)
+            and current_minutes <= end_minutes
+        )
+    )
+
+
 async def _staff_shift_rank(staff: dict) -> Optional[int]:
-    now = datetime.now(timezone.utc)
+    now = hotel_local_now()
+    relevant_dates = [
+        now.date().isoformat(),
+        (now.date() - timedelta(days=1)).isoformat(),
+    ]
     schedules = await db.staff_schedules.find(
         with_hotel_scope(staff, {
             "employee_id": staff["id"],
-            "date": now.date().isoformat(),
+            "date": {"$in": relevant_dates},
             "status": "Approved",
         }),
         {"_id": 0},
     ).to_list(50)
-    if not schedules:
-        return 1  # Existing staff without a published schedule remains assignable.
-    current_time = now.strftime("%H:%M")
     return 0 if any(
-        schedule.get("start_time", "") <= current_time <= schedule.get("end_time", "")
-        for schedule in schedules
+        _schedule_covers_local_time(schedule, now) for schedule in schedules
     ) else None
 
 
@@ -3060,6 +3139,8 @@ async def assign_request_to_best_staff(request_doc: dict) -> Optional[dict]:
     ranked: List[tuple[int, int, str, dict]] = []
     for staff in candidates:
         if not staff_request_scope_compatibility(staff, request_doc)[0]:
+            continue
+        if not staff_request_scope_is_verifiable(staff, request_doc):
             continue
         shift_rank = await _staff_shift_rank(staff)
         if shift_rank is None:
