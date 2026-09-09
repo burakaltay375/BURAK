@@ -43,6 +43,7 @@ class CentralAiOperationsTest(unittest.TestCase):
             "id": cls.hotel_id,
             "hotel_name": "Central Operations Test Hotel",
             "city": "Istanbul",
+            "timezone": "Europe/Istanbul",
             "active": True,
             "services": server.default_services(),
             **scope,
@@ -260,9 +261,12 @@ class CentralAiOperationsTest(unittest.TestCase):
         }
         self.database.requests.insert_one(request_doc.copy())
 
-        async def run_checks() -> tuple[list[str], object]:
+        async def run_checks() -> tuple[list[str], object, str]:
             candidates = await server._safe_assignment_candidates(request_doc)
             candidate_ids = [candidate["staff"]["id"] for candidate in candidates]
+            local_timezone = str(
+                (await server.hotel_local_now_for(self.hotel_id)).tzinfo
+            )
             original = server.call_assignment_ai
 
             async def invalid_ai(_request: dict, _candidates: list[dict]) -> dict:
@@ -278,9 +282,10 @@ class CentralAiOperationsTest(unittest.TestCase):
                 selected = await server.assign_request_to_best_staff(request_doc)
             finally:
                 server.call_assignment_ai = original
-            return candidate_ids, selected
+            return candidate_ids, selected, local_timezone
 
-        candidate_ids, selected = asyncio.run(run_checks())
+        candidate_ids, selected, local_timezone = asyncio.run(run_checks())
+        self.assertEqual(local_timezone, "Europe/Istanbul")
         self.assertEqual(candidate_ids, [self.staff_id])
         self.assertIsNotNone(selected)
         self.assertEqual(selected["id"], self.staff_id)
@@ -652,18 +657,6 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertEqual(task_c["hotel_id"], hotel_c)
         self.assertEqual(task_c["assigned_staff_id"], staff_c["Personel F"])
         self.assertNotIn(task_c["assigned_staff_id"], set(staff_b.values()))
-
-    def test_hotel_local_time_comes_from_tenant_record(self) -> None:
-        hotel_id, _, _ = self.seed_tenant(
-            "timezone", "88", "1",
-            [("Timezone Staff", "1. kat", "1-100 numaralı odalar")],
-        )
-        self.database.hotels.update_one(
-            {"id": hotel_id},
-            {"$set": {"timezone": "Pacific/Auckland"}},
-        )
-        local_now = asyncio.run(server.hotel_local_now_for(hotel_id))
-        self.assertEqual(str(local_now.tzinfo), "Pacific/Auckland")
 
     def test_supported_operation_types_and_internal_issue_isolation(self) -> None:
         cases = (
