@@ -1,6 +1,7 @@
 """End-to-end checks for the shared Guest AI / Staff AI operations flow."""
 
 import os
+import asyncio
 import json
 import unittest
 import urllib.error
@@ -26,9 +27,17 @@ class CentralAiOperationsTest(unittest.TestCase):
         cls.staff_id = f"staff-west-204-{suffix}"
         cls.out_of_scope_staff_id = f"staff-west-2300-{suffix}"
         cls.ambiguous_staff_id = f"staff-ambiguous-{suffix}"
+        cls.empty_scope_staff_id = f"staff-empty-scope-{suffix}"
+        cls.no_shift_staff_id = f"staff-no-shift-{suffix}"
         cls.manager_id = f"manager-{suffix}"
         cls.room_204_id = f"room-204-{suffix}"
         cls.room_2400_id = f"room-2400-{suffix}"
+        cls.hotel_ids = [cls.hotel_id]
+        cls.user_ids = [
+            cls.guest_id, cls.other_guest_id, cls.staff_id,
+            cls.out_of_scope_staff_id, cls.ambiguous_staff_id,
+            cls.empty_scope_staff_id, cls.no_shift_staff_id, cls.manager_id,
+        ]
         scope = {"hotel_id": cls.hotel_id, "hotelId": cls.hotel_id}
         cls.database.hotels.insert_one({
             "id": cls.hotel_id,
@@ -51,10 +60,10 @@ class CentralAiOperationsTest(unittest.TestCase):
             },
             {
                 "id": cls.staff_id, "email": "staff204@test.local",
-                "name": "Ahmet West", "role": "staff",
+                "name": "melih", "role": "staff",
                 "department": "housekeeping", "position": "Kat Görevlisi",
-                "work_area": "West Block",
-                "responsibility_description": "West Block 200-250 odalarının temizliğinden sorumludur.",
+                "work_area": "2. kat",
+                "responsibility_description": "200 ile 300 arası odaların temizliğinden sorumludur.",
                 "active": True, **scope,
             },
             {
@@ -66,11 +75,26 @@ class CentralAiOperationsTest(unittest.TestCase):
                 "active": True, **scope,
             },
             {
+                "id": cls.empty_scope_staff_id, "email": "empty@test.local",
+                "name": "Empty Scope", "role": "staff",
+                "department": "housekeeping", "position": "Kat Görevlisi",
+                "work_area": None, "responsibility_description": None,
+                "active": True, **scope,
+            },
+            {
+                "id": cls.no_shift_staff_id, "email": "noshift@test.local",
+                "name": "No Shift", "role": "staff",
+                "department": "housekeeping", "position": "Kat Görevlisi",
+                "work_area": "2. kat",
+                "responsibility_description": "200-300 numaralı odalar",
+                "active": True, **scope,
+            },
+            {
                 "id": cls.out_of_scope_staff_id, "email": "staff2300@test.local",
                 "name": "Ayşe West", "role": "staff",
                 "department": "housekeeping", "position": "Kat Görevlisi",
-                "work_area": "West Block",
-                "responsibility_description": "West Block 2300-2399 odalarının temizliğinden sorumludur.",
+                "work_area": "2. kat",
+                "responsibility_description": "301-400 numaralı odaların temizliğinden sorumludur.",
                 "active": True, **scope,
             },
             {
@@ -82,7 +106,7 @@ class CentralAiOperationsTest(unittest.TestCase):
         cls.database.rooms.insert_many([
             {
                 "id": cls.room_204_id, "room_number": "204", "room_type": "Standard",
-                "type": "Standard", "floor": "West Block", "capacity": 2,
+                "type": "Standard", "floor": "2", "capacity": 2,
                 "price_per_night": 100, "operational_status": "normal",
                 "status": "occupied", "is_active": True,
                 "created_at": server.now_iso(), "updated_at": server.now_iso(), **scope,
@@ -98,9 +122,9 @@ class CentralAiOperationsTest(unittest.TestCase):
         cls.database.staff_schedules.insert_many([
             {
                 "id": f"shift-{cls.staff_id}", "employee_id": cls.staff_id,
-                "employee_name": "Ahmet West", "department": "housekeeping",
+                "employee_name": "melih", "department": "housekeeping",
                 "date": server.hotel_local_now().date().isoformat(),
-                "start_time": "00:00", "end_time": "23:59", "task": "West Block",
+                "start_time": "00:00", "end_time": "23:59", "task": "2. kat",
                 "status": "Approved", "created_at": server.now_iso(),
                 "updated_at": server.now_iso(), **scope,
             },
@@ -109,7 +133,16 @@ class CentralAiOperationsTest(unittest.TestCase):
                 "employee_id": cls.out_of_scope_staff_id,
                 "employee_name": "Ayşe West", "department": "housekeeping",
                 "date": server.hotel_local_now().date().isoformat(),
-                "start_time": "00:00", "end_time": "23:59", "task": "West Block 2300",
+                "start_time": "00:00", "end_time": "23:59", "task": "2. kat",
+                "status": "Approved", "created_at": server.now_iso(),
+                "updated_at": server.now_iso(), **scope,
+            },
+            {
+                "id": f"shift-{cls.empty_scope_staff_id}",
+                "employee_id": cls.empty_scope_staff_id,
+                "employee_name": "Empty Scope", "department": "housekeeping",
+                "date": server.hotel_local_now().date().isoformat(),
+                "start_time": "00:00", "end_time": "23:59", "task": "2. kat",
                 "status": "Approved", "created_at": server.now_iso(),
                 "updated_at": server.now_iso(), **scope,
             },
@@ -117,18 +150,16 @@ class CentralAiOperationsTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        hotel_scope = {
-            "$or": [{"hotel_id": cls.hotel_id}, {"hotelId": cls.hotel_id}],
-        }
+        hotel_scope = {"$or": [
+            {"hotel_id": {"$in": cls.hotel_ids}},
+            {"hotelId": {"$in": cls.hotel_ids}},
+        ]}
         cls.database.chat_messages.delete_many({
-            "user_id": {"$in": [
-                cls.guest_id, cls.other_guest_id, cls.staff_id,
-                cls.ambiguous_staff_id, cls.manager_id,
-            ]},
+            "user_id": {"$in": cls.user_ids},
         })
         for collection in ("staff_schedules", "requests", "rooms", "users"):
             cls.database[collection].delete_many(hotel_scope)
-        cls.database.hotels.delete_many({"id": cls.hotel_id})
+        cls.database.hotels.delete_many({"id": {"$in": cls.hotel_ids}})
         cls.mongo.close()
 
     def auth(self, user_id: str) -> dict[str, str]:
@@ -154,6 +185,108 @@ class CentralAiOperationsTest(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
 
+    def seed_tenant(
+        self,
+        label: str,
+        room_number: str,
+        floor: str,
+        staff_scopes: list[tuple[str, str, str]],
+    ) -> tuple[str, str, dict[str, str]]:
+        suffix = uuid.uuid4().hex
+        hotel_id = f"tenant-{label}-{suffix}"
+        guest_id = f"guest-{label}-{suffix}"
+        scope = {"hotel_id": hotel_id, "hotelId": hotel_id}
+        self.hotel_ids.append(hotel_id)
+        self.user_ids.append(guest_id)
+        self.database.hotels.insert_one({
+            "id": hotel_id, "hotel_name": f"Tenant {label}", "city": "Istanbul",
+            "active": True, "services": server.default_services(), **scope,
+        })
+        self.database.users.insert_one({
+            "id": guest_id, "email": f"guest-{suffix}@test.local",
+            "name": f"Guest {label}", "role": "guest", "room_no": room_number,
+            "active": True, **scope,
+        })
+        self.database.rooms.insert_one({
+            "id": f"room-{suffix}", "room_number": room_number,
+            "room_type": "Standard", "type": "Standard", "floor": floor,
+            "capacity": 2, "price_per_night": 100,
+            "operational_status": "normal", "status": "occupied",
+            "is_active": True, "created_at": server.now_iso(),
+            "updated_at": server.now_iso(), **scope,
+        })
+        staff_ids: dict[str, str] = {}
+        for name, work_area, responsibility in staff_scopes:
+            staff_id = f"staff-{name.lower()}-{suffix}"
+            staff_ids[name] = staff_id
+            self.user_ids.append(staff_id)
+            self.database.users.insert_one({
+                "id": staff_id, "email": f"{name.lower()}-{suffix}@test.local",
+                "name": name, "role": "staff", "department": "housekeeping",
+                "position": "Kat Görevlisi", "work_area": work_area,
+                "responsibility_description": responsibility,
+                "active": True, **scope,
+            })
+            self.database.staff_schedules.insert_one({
+                "id": f"shift-{staff_id}", "employee_id": staff_id,
+                "employee_name": name, "department": "housekeeping",
+                "date": server.hotel_local_now().date().isoformat(),
+                "start_time": "00:00", "end_time": "23:59",
+                "task": work_area, "status": "Approved",
+                "created_at": server.now_iso(), "updated_at": server.now_iso(),
+                **scope,
+            })
+        return hotel_id, guest_id, staff_ids
+
+    def test_assignment_candidate_security_and_invalid_ai_id(self) -> None:
+        request_id = f"invalid-ai-{uuid.uuid4().hex}"
+        scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
+        request_doc = {
+            "id": request_id,
+            "guest_id": self.guest_id,
+            "guest_name": "Guest 204",
+            "room_no": "204",
+            "room_area": "2. kat 204 Standard oda",
+            "room_type": "Standard",
+            "departman": "housekeeping",
+            "hizmet_turu": "Housekeeping",
+            "zaman": "Şimdi",
+            "detay": "204 numaralı odanın temizlenmesini istiyorum.",
+            "oncelik": "ORTA",
+            "status": "ALINDI",
+            "created_at": server.now_iso(),
+            "updated_at": server.now_iso(),
+            **scope,
+        }
+        self.database.requests.insert_one(request_doc.copy())
+
+        async def run_checks() -> tuple[list[str], object]:
+            candidates = await server._safe_assignment_candidates(request_doc)
+            candidate_ids = [candidate["staff"]["id"] for candidate in candidates]
+            original = server.call_assignment_ai
+
+            async def invalid_ai(_request: dict, _candidates: list[dict]) -> dict:
+                return {
+                    "recommended_staff_id": "invented-cross-tenant-id",
+                    "confidence": 0.99,
+                    "reason": "invalid",
+                    "candidate_analysis": [],
+                }
+
+            server.call_assignment_ai = invalid_ai
+            try:
+                selected = await server.assign_request_to_best_staff(request_doc)
+            finally:
+                server.call_assignment_ai = original
+            return candidate_ids, selected
+
+        candidate_ids, selected = asyncio.run(run_checks())
+        self.assertEqual(candidate_ids, [self.staff_id])
+        self.assertIsNone(selected)
+        stored = self.database.requests.find_one({"id": request_id})
+        self.assertEqual(stored["status"], "ALINDI")
+        self.assertIsNone(stored.get("assigned_staff_id"))
+
     def test_full_guest_staff_operations_flow(self) -> None:
         status_code, created = self.request(
             "POST", "/api/chat", self.guest_id,
@@ -166,6 +299,8 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertEqual(task["departman"], "housekeeping")
         self.assertEqual(task["source"], "guest_ai")
         self.assertEqual(task["assigned_staff_id"], self.staff_id)
+        self.assertEqual(task["assigned_staff_name"], "melih")
+        self.assertEqual(task["assignment_source"], "secure_workload_fallback")
         self.assertEqual(task["status"], "PERSONEL_GIDIYOR")
 
         _, rooms = self.request("GET", "/api/staff/rooms", self.staff_id)
@@ -296,6 +431,42 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertTrue(server._schedule_covers_local_time(overnight, after_midnight))
         self.assertFalse(server._schedule_covers_local_time(overnight, after_shift))
 
+    def test_multi_tenant_dynamic_assignment(self) -> None:
+        hotel_b, guest_b, staff_b = self.seed_tenant(
+            "b", "75", "1",
+            [
+                ("Personel C", "1. kat", "1-50 numaralı odalar"),
+                ("Personel D", "1. kat", "51 ile 150 arası odalar"),
+            ],
+        )
+        _, response_b = self.request(
+            "POST", "/api/chat", guest_b,
+            {"message": "75 numaralı odanın temizlenmesini istiyorum."},
+        )
+        task_b = self.database.requests.find_one({
+            "id": response_b["request_id"],
+        })
+        self.assertEqual(task_b["hotel_id"], hotel_b)
+        self.assertEqual(task_b["assigned_staff_id"], staff_b["Personel D"])
+
+        hotel_c, guest_c, staff_c = self.seed_tenant(
+            "c", "10", "B Block",
+            [
+                ("Personel E", "A blok", "A blok standart odalar"),
+                ("Personel F", "B blok", "B blok standart odalar"),
+            ],
+        )
+        _, response_c = self.request(
+            "POST", "/api/chat", guest_c,
+            {"message": "10 numaralı odanın temizlenmesini istiyorum."},
+        )
+        task_c = self.database.requests.find_one({
+            "id": response_c["request_id"],
+        })
+        self.assertEqual(task_c["hotel_id"], hotel_c)
+        self.assertEqual(task_c["assigned_staff_id"], staff_c["Personel F"])
+        self.assertNotIn(task_c["assigned_staff_id"], set(staff_b.values()))
+
     def test_supported_operation_types_and_internal_issue_isolation(self) -> None:
         cases = (
             ("204'te klima çalışmıyor.", "teknik_destek"),
@@ -339,6 +510,50 @@ class CentralAiOperationsTest(unittest.TestCase):
         self.assertNotIn("assigned_staff_id", guest_task)
         self.assertNotIn("assigned_staff_name", guest_task)
         self.assertNotIn("proof_photo", guest_task)
+
+    def test_scope_parser_natural_language_variants(self) -> None:
+        request_doc = {
+            "departman": "housekeeping",
+            "room_no": "204",
+            "room_area": "2. kat B Block Standard oda",
+            "room_type": "Standard",
+            "hizmet_turu": "Housekeeping",
+            "detay": "204 numaralı odanın temizliği",
+        }
+        valid_scopes = (
+            ("Odalar", "200-300 numaralı odalar"),
+            ("Odalar", "200 ile 300 arası odalar"),
+            ("Odalar", "200, 204, 208 numaralı odalar"),
+            ("2. kat", "Bu kattaki odalar"),
+            ("B blok", "B blok operasyonları"),
+            ("Standart odalar", "Standart odaların temizliği"),
+        )
+        for work_area, responsibility in valid_scopes:
+            staff = {
+                "department": "housekeeping",
+                "work_area": work_area,
+                "responsibility_description": responsibility,
+            }
+            compatible, reason = server.staff_request_scope_compatibility(
+                staff, request_doc
+            )
+            self.assertTrue(compatible, (work_area, responsibility, reason))
+
+        for work_area, responsibility in (
+            ("", ""),
+            ("Sağ blok", "Gerektiğinde yardım eder"),
+            ("A blok", "A blok standart odalar"),
+            ("3. kat", "Bu kattaki odalar"),
+        ):
+            staff = {
+                "department": "housekeeping",
+                "work_area": work_area,
+                "responsibility_description": responsibility,
+            }
+            compatible, _ = server.staff_request_scope_compatibility(
+                staff, request_doc
+            )
+            self.assertFalse(compatible, (work_area, responsibility))
 
     def test_guest_cannot_create_for_another_room(self) -> None:
         status_code, _ = self.request(
