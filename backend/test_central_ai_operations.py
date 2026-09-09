@@ -375,34 +375,39 @@ class CentralAiOperationsTest(unittest.TestCase):
         )
         for initial_message, room_number, department, quantity in cases:
             suffix = uuid.uuid4().hex
-            guest_id = f"guest-state-{room_number}-{suffix}"
+            guest_id = (
+                self.guest_id
+                if room_number == "204"
+                else f"guest-state-{room_number}-{suffix}"
+            )
             session_id = f"session-state-{suffix}"
             scope = {"hotel_id": self.hotel_id, "hotelId": self.hotel_id}
-            self.user_ids.append(guest_id)
-            self.database.users.insert_one({
-                "id": guest_id,
-                "email": f"state-{room_number}-{suffix}@test.local",
-                "name": f"State Guest {room_number}",
-                "role": "guest",
-                "room_no": room_number,
-                "active": True,
-                **scope,
-            })
-            self.database.rooms.insert_one({
-                "id": f"room-state-{room_number}-{suffix}",
-                "room_number": room_number,
-                "room_type": "Standard",
-                "type": "Standard",
-                "floor": room_number[:-2] or "1",
-                "capacity": 2,
-                "price_per_night": 100,
-                "operational_status": "normal",
-                "status": "occupied",
-                "is_active": True,
-                "created_at": server.now_iso(),
-                "updated_at": server.now_iso(),
-                **scope,
-            })
+            if room_number != "204":
+                self.user_ids.append(guest_id)
+                self.database.users.insert_one({
+                    "id": guest_id,
+                    "email": f"state-{room_number}-{suffix}@test.local",
+                    "name": f"State Guest {room_number}",
+                    "role": "guest",
+                    "room_no": room_number,
+                    "active": True,
+                    **scope,
+                })
+                self.database.rooms.insert_one({
+                    "id": f"room-state-{room_number}-{suffix}",
+                    "room_number": room_number,
+                    "room_type": "Standard",
+                    "type": "Standard",
+                    "floor": room_number[:-2] or "1",
+                    "capacity": 2,
+                    "price_per_night": 100,
+                    "operational_status": "normal",
+                    "status": "occupied",
+                    "is_active": True,
+                    "created_at": server.now_iso(),
+                    "updated_at": server.now_iso(),
+                    **scope,
+                })
 
             first_code, first = self.request(
                 "POST", "/api/chat", guest_id,
